@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+
+# Environment files (NEVER commit secrets)
+.env
+.env.local
+.env.*.local
+apps/api/.env
+apps/web/.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Test coverage
+coverage/
+.nyc_output/
+
+# Database files (local dev)
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# TypeScript cache
+*.tsbuildinfo
