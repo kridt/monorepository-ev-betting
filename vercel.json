@@ -1,6 +1,6 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "cd packages/shared && pnpm run build && cd ../../apps/web && pnpm run build",
+  "buildCommand": "cd /vercel/path0 && pnpm --filter @ev-bets/shared run build && pnpm --filter @ev-bets/web run build",
   "outputDirectory": "apps/web/dist",
   "routes": [
     { "handle": "filesystem" },
