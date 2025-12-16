@@ -1,7 +1,7 @@
 {
   "installCommand": "pnpm install",
-  "buildCommand": "cd /vercel/path0 && pnpm --filter @ev-bets/shared run build && pnpm --filter @ev-bets/web run build",
-  "outputDirectory": "apps/web/dist",
+  "buildCommand": "cd /vercel/path0 && pnpm --filter @ev-bets/shared run build && pnpm --filter @ev-bets/web run build && cp -r apps/web/dist .",
+  "outputDirectory": "dist",
   "routes": [
     { "handle": "filesystem" },
     { "src": "/(.*)", "dest": "/index.html" }
