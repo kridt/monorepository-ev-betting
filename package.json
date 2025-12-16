@@ -10,6 +10,7 @@
     "build": "pnpm -r build",
     "build:api": "pnpm --filter @ev-bets/api build",
     "build:web": "pnpm --filter @ev-bets/web build",
+    "build:vercel": "pnpm --filter @ev-bets/shared build && pnpm --filter @ev-bets/web build && cp -r apps/web/dist .",
     "test": "pnpm -r test",
     "test:api": "pnpm --filter @ev-bets/api test",
     "lint": "pnpm -r lint",

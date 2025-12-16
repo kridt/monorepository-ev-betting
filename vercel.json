@@ -1,5 +1,17 @@
 {
-  "buildCommand": "pnpm install && pnpm --filter @ev-bets/shared build && pnpm --filter @ev-bets/web build",
-  "outputDirectory": "dist",
-  "framework": null
+  "version": 2,
+  "builds": [
+    {
+      "src": "package.json",
+      "use": "@vercel/static-build",
+      "config": {
+        "buildCommand": "pnpm --filter @ev-bets/shared build && pnpm --filter @ev-bets/web build && cp -r apps/web/dist .",
+        "distDir": "dist"
+      }
+    }
+  ],
+  "routes": [
+    { "handle": "filesystem" },
+    { "src": "/(.*)", "dest": "/index.html" }
+  ]
 }
