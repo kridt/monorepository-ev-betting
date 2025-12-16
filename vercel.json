@@ -1,5 +1,5 @@
 {
   "buildCommand": "pnpm install && pnpm --filter @ev-bets/shared build && pnpm --filter @ev-bets/web build",
   "outputDirectory": "dist",
-  "framework": "vite"
+  "framework": null
 }
