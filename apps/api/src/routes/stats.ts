@@ -1,5 +1,12 @@
 import type { FastifyInstance } from 'fastify';
-import { getFixtureStats, validatePlayerBet } from '../services/sportMonksClient.js';
+import {
+  getFixtureStats,
+  validatePlayerBet,
+  batchValidateSoccerBets,
+  validateTeamBet,
+  validateBTTS,
+  validateMatchResult,
+} from '../services/sportMonksClient.js';
 import { validateNBAPlayerBet, batchValidateNBABets } from '../services/ballDontLieClient.js';
 import { db, schema } from '../db/index.js';
 import { eq } from 'drizzle-orm';
@@ -134,7 +141,7 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * POST /stats/validate
-   * Validate a bet against historical player/team data
+   * Validate a soccer player bet against historical data
    * Returns hit rate for the last N matches
    */
   app.post<{
@@ -180,6 +187,224 @@ export async function statsRoutes(app: FastifyInstance): Promise<void> {
       console.error('[Stats] Error validating bet:', error);
       return reply.status(500).send({
         error: 'Failed to validate bet',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  /**
+   * POST /stats/validate-soccer-batch
+   * Batch validate multiple soccer player bets
+   * Returns validation results keyed by opportunity ID
+   */
+  app.post<{
+    Body: {
+      bets: Array<{
+        opportunityId: string;
+        playerName: string;
+        market: string;
+        line: number;
+        selection: string;
+      }>;
+      matchCount?: number;
+    };
+  }>('/validate-soccer-batch', async (request, reply) => {
+    const { bets, matchCount = 10 } = request.body;
+
+    if (!bets || !Array.isArray(bets) || bets.length === 0) {
+      return reply.status(400).send({
+        error: 'Missing required field: bets (array)',
+      });
+    }
+
+    // Limit batch size
+    const limitedBets = bets.slice(0, 50);
+
+    try {
+      // Transform bets to include direction
+      const transformedBets = limitedBets.map(bet => ({
+        opportunityId: bet.opportunityId,
+        playerName: bet.playerName,
+        market: bet.market,
+        line: bet.line,
+        direction: (bet.selection.toLowerCase().includes('over') ? 'over' : 'under') as 'over' | 'under',
+      }));
+
+      const results = await batchValidateSoccerBets(transformedBets, matchCount);
+
+      // Convert Map to object for JSON response
+      const responseData: Record<string, unknown> = {};
+      for (const [id, result] of results) {
+        responseData[id] = result;
+      }
+
+      return {
+        data: responseData,
+        processed: limitedBets.length,
+        total: bets.length,
+      };
+    } catch (error) {
+      console.error('[Stats] Error batch validating soccer bets:', error);
+      return reply.status(500).send({
+        error: 'Failed to batch validate soccer bets',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  /**
+   * POST /stats/validate-team
+   * Validate a team market bet (corners, shots, goals over/under)
+   */
+  app.post<{
+    Body: {
+      teamName: string;
+      market: string;
+      line: number;
+      selection: string;
+      matchCount?: number;
+    };
+  }>('/validate-team', async (request, reply) => {
+    const { teamName, market, line, selection, matchCount = 10 } = request.body;
+
+    if (!teamName || !market || line === undefined || !selection) {
+      return reply.status(400).send({
+        error: 'Missing required fields: teamName, market, line, selection',
+      });
+    }
+
+    const direction = selection.toLowerCase().includes('over') ? 'over' : 'under';
+
+    try {
+      const result = await validateTeamBet(
+        teamName,
+        market,
+        line,
+        direction as 'over' | 'under',
+        matchCount
+      );
+
+      if (!result) {
+        return reply.status(200).send({
+          data: null,
+          message: 'Could not find historical data for this team/market',
+        });
+      }
+
+      return {
+        data: result,
+      };
+    } catch (error) {
+      console.error('[Stats] Error validating team bet:', error);
+      return reply.status(500).send({
+        error: 'Failed to validate team bet',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  /**
+   * POST /stats/validate-btts
+   * Validate Both Teams To Score market
+   */
+  app.post<{
+    Body: {
+      homeTeam: string;
+      awayTeam: string;
+      selection: string; // "yes" or "no"
+      matchCount?: number;
+    };
+  }>('/validate-btts', async (request, reply) => {
+    const { homeTeam, awayTeam, selection, matchCount = 10 } = request.body;
+
+    if (!homeTeam || !awayTeam || !selection) {
+      return reply.status(400).send({
+        error: 'Missing required fields: homeTeam, awayTeam, selection',
+      });
+    }
+
+    const bttsSelection = selection.toLowerCase().includes('yes') ? 'yes' : 'no';
+
+    try {
+      const result = await validateBTTS(
+        homeTeam,
+        awayTeam,
+        bttsSelection as 'yes' | 'no',
+        matchCount
+      );
+
+      if (!result) {
+        return reply.status(200).send({
+          data: null,
+          message: 'Could not find historical data for these teams',
+        });
+      }
+
+      return {
+        data: result,
+      };
+    } catch (error) {
+      console.error('[Stats] Error validating BTTS:', error);
+      return reply.status(500).send({
+        error: 'Failed to validate BTTS',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
+
+  /**
+   * POST /stats/validate-1x2
+   * Validate Match Result (1X2) market
+   */
+  app.post<{
+    Body: {
+      homeTeam: string;
+      awayTeam: string;
+      selection: string; // "1", "X", or "2"
+      matchCount?: number;
+    };
+  }>('/validate-1x2', async (request, reply) => {
+    const { homeTeam, awayTeam, selection, matchCount = 10 } = request.body;
+
+    if (!homeTeam || !awayTeam || !selection) {
+      return reply.status(400).send({
+        error: 'Missing required fields: homeTeam, awayTeam, selection',
+      });
+    }
+
+    // Normalize selection
+    let normalizedSelection: '1' | 'X' | '2';
+    const sel = selection.toLowerCase();
+    if (sel === '1' || sel.includes('home')) {
+      normalizedSelection = '1';
+    } else if (sel === '2' || sel.includes('away')) {
+      normalizedSelection = '2';
+    } else {
+      normalizedSelection = 'X';
+    }
+
+    try {
+      const result = await validateMatchResult(
+        homeTeam,
+        awayTeam,
+        normalizedSelection,
+        matchCount
+      );
+
+      if (!result) {
+        return reply.status(200).send({
+          data: null,
+          message: 'Could not find historical data for these teams',
+        });
+      }
+
+      return {
+        data: result,
+      };
+    } catch (error) {
+      console.error('[Stats] Error validating match result:', error);
+      return reply.status(500).send({
+        error: 'Failed to validate match result',
         message: error instanceof Error ? error.message : 'Unknown error',
       });
     }

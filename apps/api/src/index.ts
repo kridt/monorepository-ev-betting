@@ -5,17 +5,23 @@ import { registerRoutes } from './routes/index.js';
 import { initDatabase } from './db/index.js';
 import { startScheduler, stopScheduler } from './scheduler/index.js';
 
+const isDev = process.env.NODE_ENV !== 'production';
+
 const app = Fastify({
-  logger: {
-    level: 'info',
-    transport: {
-      target: 'pino-pretty',
-      options: {
-        translateTime: 'HH:MM:ss Z',
-        ignore: 'pid,hostname',
+  logger: isDev
+    ? {
+        level: 'info',
+        transport: {
+          target: 'pino-pretty',
+          options: {
+            translateTime: 'HH:MM:ss Z',
+            ignore: 'pid,hostname',
+          },
+        },
+      }
+    : {
+        level: 'info',
       },
-    },
-  },
 });
 
 // Register CORS - allow all origins for now
