@@ -214,3 +214,104 @@ export async function validateNBABetsBatch(
     body: JSON.stringify({ bets, matchCount }),
   });
 }
+
+// Team Validation (Soccer team markets - corners, goals, shots)
+export interface TeamValidationResult {
+  teamName: string;
+  teamId: number;
+  market: string;
+  marketName: string;
+  line: number;
+  direction: 'over' | 'under';
+  matchesChecked: number;
+  hits: number;
+  hitRate: number; // 0-100
+  recentMatches: {
+    date: string;
+    opponent: string;
+    homeAway: 'home' | 'away';
+    value: number;
+    hit: boolean;
+    result: string;
+  }[];
+  avgValue: number;
+  homeAvg?: number;
+  awayAvg?: number;
+}
+
+export interface TeamValidationResponse {
+  data: TeamValidationResult | null;
+  message?: string;
+  error?: string;
+}
+
+export interface ValidateTeamBetParams {
+  teamName: string;
+  market: string;
+  line: number;
+  selection: string;
+  matchCount?: number;
+}
+
+export async function validateTeamBet(params: ValidateTeamBetParams): Promise<TeamValidationResponse> {
+  return fetchJSON('/stats/validate-team', {
+    method: 'POST',
+    body: JSON.stringify(params),
+  });
+}
+
+// BTTS Validation
+export interface BTTSValidationResult {
+  homeTeamBTTSRate: number;
+  awayTeamBTTSRate: number;
+  combinedRate: number;
+  homeRecentMatches: { date: string; opponent: string; btts: boolean }[];
+  awayRecentMatches: { date: string; opponent: string; btts: boolean }[];
+}
+
+export interface BTTSValidationResponse {
+  data: BTTSValidationResult | null;
+  message?: string;
+  error?: string;
+}
+
+export async function validateBTTS(
+  homeTeam: string,
+  awayTeam: string,
+  selection: string,
+  matchCount: number = 10
+): Promise<BTTSValidationResponse> {
+  return fetchJSON('/stats/validate-btts', {
+    method: 'POST',
+    body: JSON.stringify({ homeTeam, awayTeam, selection, matchCount }),
+  });
+}
+
+// 1X2 (Match Result) Validation
+export interface MatchResultValidationResult {
+  homeWinRate: number;
+  drawRate: number;
+  awayWinRate: number;
+  homeForm: string;
+  awayForm: string;
+  homeRecentMatches: { date: string; opponent: string; result: 'W' | 'D' | 'L'; score: string }[];
+  awayRecentMatches: { date: string; opponent: string; result: 'W' | 'D' | 'L'; score: string }[];
+}
+
+export interface MatchResultValidationResponse {
+  data: MatchResultValidationResult | null;
+  message?: string;
+  error?: string;
+}
+
+export async function validateMatchResult(
+  homeTeam: string,
+  awayTeam: string,
+  selection: string,
+  matchCount: number = 10
+): Promise<MatchResultValidationResponse> {
+  return fetchJSON('/stats/validate-1x2', {
+    method: 'POST',
+    body: JSON.stringify({ homeTeam, awayTeam, selection, matchCount }),
+  });
+}

@@ -20,8 +20,17 @@ const app = Fastify({
 
 // Register CORS
 await app.register(cors, {
-  origin: true, // Allow all origins in dev; configure for prod
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:3000',
+    'https://monorepository-ev-betting-web.vercel.app',
+    /\.vercel\.app$/,  // Allow all Vercel preview deployments
+  ],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'Origin', 'X-Requested-With'],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
 });
 
 // Initialize database

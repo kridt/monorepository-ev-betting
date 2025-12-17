@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, type NBAValidationResult, type OpportunityResponse } from '../api/client';
+import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, validateTeamBet, validateBTTS, validateMatchResult, type NBAValidationResult, type OpportunityResponse, type TeamValidationResult, type BTTSValidationResult, type MatchResultValidationResult } from '../api/client';
 // NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
@@ -154,6 +154,54 @@ function extractPlayerName(selection: string, playerName?: string): string | und
   return match ? match[1].trim() : undefined;
 }
 
+// Check if a market is a team/match-level market (not player prop)
+function isTeamMarket(market: string): boolean {
+  const m = market.toLowerCase();
+  return m.includes('corner') ||
+    m.includes('btts') ||
+    m.includes('both_teams') ||
+    m === 'moneyline' ||
+    m === '1x2' ||
+    m.includes('total_goals') ||
+    m.includes('team_goals') ||
+    m.includes('total_cards') ||
+    m.includes('team_cards');
+}
+
+// Extract team name from selection for team markets
+function extractTeamName(selection: string, homeTeam?: string, awayTeam?: string): string | undefined {
+  const sel = selection.toLowerCase();
+  // For corners, goals, etc. the selection often includes the team name
+  // Examples: "Manchester City Over 5.5", "Home Over 8.5"
+  if (homeTeam && sel.includes(homeTeam.toLowerCase().split(' ')[0])) {
+    return homeTeam;
+  }
+  if (awayTeam && sel.includes(awayTeam.toLowerCase().split(' ')[0])) {
+    return awayTeam;
+  }
+  // Try to extract from selection pattern "TeamName Over/Under X.X"
+  const match = selection.match(/^(.+?)\s+(over|under)\s+[\d.]+$/i);
+  if (match) {
+    const potentialTeam = match[1].trim();
+    // Don't return if it's just "Home" or "Away" or "Total"
+    if (!['home', 'away', 'total', 'match'].includes(potentialTeam.toLowerCase())) {
+      return potentialTeam;
+    }
+  }
+  return undefined;
+}
+
+// Determine which type of team validation to use
+function getTeamMarketType(market: string): 'team' | 'btts' | '1x2' | 'total' | null {
+  const m = market.toLowerCase();
+  if (m.includes('btts') || m.includes('both_teams')) return 'btts';
+  if (m === 'moneyline' || m === '1x2' || m.includes('match_result')) return '1x2';
+  if (m.includes('total') && (m.includes('corner') || m.includes('goal') || m.includes('card'))) return 'total';
+  if (m.includes('team') && (m.includes('corner') || m.includes('goal') || m.includes('card'))) return 'team';
+  if (m.includes('corner')) return 'team'; // Default corners to team
+  return null;
+}
+
 function getOrdinalSuffix(n: number): string {
   const s = ['th', 'st', 'nd', 'rd'];
   const v = n % 100;
@@ -245,6 +293,9 @@ export default function Opportunities() {
   const [showFilters, setShowFilters] = useState(false);
   const [validationResults, setValidationResults] = useState<Record<string, ValidationResult | null>>({});
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
+  // Team validation state (for soccer team markets like corners, BTTS, 1X2)
+  const [teamValidationResults, setTeamValidationResults] = useState<Record<string, TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null>>({});
+  const [teamValidatingIds, setTeamValidatingIds] = useState<Set<string>>(new Set());
   // NBA validation is pre-computed on the server - no client-side state needed
 
   // Mutation for validating bets
@@ -264,25 +315,51 @@ export default function Opportunities() {
     e.preventDefault(); // Prevent link navigation
     e.stopPropagation();
 
-    if (!opp.playerName || opp.line === undefined) return;
+    // Extract player name from selection if not directly available
+    const playerName = extractPlayerName(opp.selection, opp.playerName);
 
-    const key = `${opp.playerName}-${opp.market}-${opp.line}`;
+    console.log('[Validate] Button clicked', {
+      id: opp.id,
+      playerName,
+      oppPlayerName: opp.playerName,
+      selection: opp.selection,
+      market: opp.market,
+      line: opp.line,
+    });
+
+    if (!playerName || opp.line === undefined) {
+      console.warn('[Validate] Missing playerName or line, skipping validation');
+      return;
+    }
+
+    const key = `${playerName}-${opp.market}-${opp.line}`;
 
     // Don't validate again if already done
-    if (validationResults[key] !== undefined) return;
+    if (validationResults[key] !== undefined) {
+      console.log('[Validate] Already validated, skipping', { key });
+      return;
+    }
 
+    console.log('[Validate] Starting validation request', { playerName, market: opp.market, line: opp.line });
     setValidatingIds(prev => new Set(prev).add(opp.id));
 
     validateMutation.mutate(
       {
-        playerName: opp.playerName,
+        playerName,
         market: opp.market,
         line: opp.line,
         selection: opp.selection,
         matchCount: 10,
       },
       {
+        onSuccess: (response) => {
+          console.log('[Validate] Success', { key, response });
+        },
+        onError: (error) => {
+          console.error('[Validate] Error', { key, error });
+        },
         onSettled: () => {
+          console.log('[Validate] Settled', { key });
           setValidatingIds(prev => {
             const next = new Set(prev);
             next.delete(opp.id);
@@ -294,11 +371,93 @@ export default function Opportunities() {
   };
 
   const getValidationResult = (opp: Opportunity): ValidationResult | null | undefined => {
-    if (!opp.playerName || opp.line === undefined) return undefined;
-    const key = `${opp.playerName}-${opp.market}-${opp.line}`;
+    const playerName = extractPlayerName(opp.selection, opp.playerName);
+    if (!playerName || opp.line === undefined) return undefined;
+    const key = `${playerName}-${opp.market}-${opp.line}`;
     return validationResults[key];
   };
   // NBA validation is pre-computed - use opp.nbaValidation directly from API response
+
+  // Handler for team/match validation (corners, BTTS, 1X2)
+  const handleTeamValidate = async (e: React.MouseEvent, opp: Opportunity, homeTeam: string, awayTeam: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const marketType = getTeamMarketType(opp.market);
+    const key = `${opp.id}-${opp.market}`;
+
+    console.log('[TeamValidate] Button clicked', {
+      id: opp.id,
+      market: opp.market,
+      marketType,
+      selection: opp.selection,
+      line: opp.line,
+      homeTeam,
+      awayTeam,
+    });
+
+    if (!marketType) {
+      console.warn('[TeamValidate] Unknown market type, skipping');
+      return;
+    }
+
+    // Don't validate again if already done
+    if (teamValidationResults[key] !== undefined) {
+      console.log('[TeamValidate] Already validated, skipping', { key });
+      return;
+    }
+
+    setTeamValidatingIds(prev => new Set(prev).add(opp.id));
+
+    try {
+      let result: TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null = null;
+
+      if (marketType === 'btts') {
+        // BTTS validation - needs both teams
+        const response = await validateBTTS(homeTeam, awayTeam, opp.selection, 10);
+        result = response.data;
+      } else if (marketType === '1x2') {
+        // Match result validation
+        const response = await validateMatchResult(homeTeam, awayTeam, opp.selection, 10);
+        result = response.data;
+      } else {
+        // Team corners/goals validation
+        // Determine which team based on selection
+        const teamName = extractTeamName(opp.selection, homeTeam, awayTeam) || homeTeam;
+        const response = await validateTeamBet({
+          teamName,
+          market: opp.market,
+          line: opp.line ?? 0,
+          selection: opp.selection,
+          matchCount: 10,
+        });
+        result = response.data;
+      }
+
+      console.log('[TeamValidate] Success', { key, result });
+      setTeamValidationResults(prev => ({
+        ...prev,
+        [key]: result,
+      }));
+    } catch (error) {
+      console.error('[TeamValidate] Error', { key, error });
+      setTeamValidationResults(prev => ({
+        ...prev,
+        [key]: null,
+      }));
+    } finally {
+      setTeamValidatingIds(prev => {
+        const next = new Set(prev);
+        next.delete(opp.id);
+        return next;
+      });
+    }
+  };
+
+  const getTeamValidationResult = (opp: Opportunity): TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null | undefined => {
+    const key = `${opp.id}-${opp.market}`;
+    return teamValidationResults[key];
+  };
 
   // Persist filters to localStorage (except search query)
   useEffect(() => {
@@ -1198,6 +1357,106 @@ export default function Opportunities() {
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
                                   </svg>
                                   Load Hit Rate
+                                </button>
+                              );
+                            })()}
+
+                            {/* Soccer Team Market Validation (corners, BTTS, 1X2, etc.) */}
+                            {match.sport === 'soccer' && isTeamMarket(opp.market) && !isPlayerProp(opp.market) && (() => {
+                              const teamValidation = getTeamValidationResult(opp);
+                              const isValidating = teamValidatingIds.has(opp.id);
+                              const marketType = getTeamMarketType(opp.market);
+
+                              // Already validated - show result
+                              if (teamValidation !== undefined) {
+                                if (teamValidation === null) {
+                                  return (
+                                    <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-500 text-xs">
+                                      No historical data
+                                    </div>
+                                  );
+                                }
+
+                                // BTTS validation result
+                                if (marketType === 'btts' && 'combinedRate' in teamValidation) {
+                                  const btts = teamValidation as BTTSValidationResult;
+                                  return (
+                                    <div className={clsx(
+                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
+                                      btts.combinedRate >= 70 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+                                      btts.combinedRate >= 50 && btts.combinedRate < 70 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+                                      btts.combinedRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                    )}>
+                                      <span className="font-bold">{btts.combinedRate.toFixed(0)}%</span>
+                                      <span className="text-slate-400">BTTS</span>
+                                      <span className="text-slate-500">H:{btts.homeTeamBTTSRate.toFixed(0)}%</span>
+                                      <span className="text-slate-500">A:{btts.awayTeamBTTSRate.toFixed(0)}%</span>
+                                    </div>
+                                  );
+                                }
+
+                                // 1X2 validation result
+                                if (marketType === '1x2' && 'homeWinRate' in teamValidation) {
+                                  const result = teamValidation as MatchResultValidationResult;
+                                  const sel = opp.selection.toLowerCase();
+                                  const relevantRate = sel.includes('home') || sel === '1' ? result.homeWinRate
+                                    : sel.includes('draw') || sel === 'x' ? result.drawRate
+                                    : result.awayWinRate;
+                                  return (
+                                    <div className={clsx(
+                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
+                                      relevantRate >= 50 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+                                      relevantRate >= 30 && relevantRate < 50 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+                                      relevantRate < 30 && 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                    )}>
+                                      <span className="font-bold">{relevantRate.toFixed(0)}%</span>
+                                      <span className="text-slate-400">form</span>
+                                      <span className="text-emerald-400">{result.homeForm}</span>
+                                      <span className="text-slate-500">vs</span>
+                                      <span className="text-cyan-400">{result.awayForm}</span>
+                                    </div>
+                                  );
+                                }
+
+                                // Team corners/goals validation result
+                                if ('hitRate' in teamValidation) {
+                                  const team = teamValidation as TeamValidationResult;
+                                  return (
+                                    <div className={clsx(
+                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
+                                      team.hitRate >= 70 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+                                      team.hitRate >= 50 && team.hitRate < 70 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+                                      team.hitRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                    )}>
+                                      <span className="font-bold">{team.hits}/{team.matchesChecked}</span>
+                                      <span className="text-slate-400">({team.hitRate.toFixed(0)}%)</span>
+                                      <span className="text-slate-500">avg: {team.avgValue.toFixed(1)}</span>
+                                    </div>
+                                  );
+                                }
+                              }
+
+                              // Validating - show spinner
+                              if (isValidating) {
+                                return (
+                                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-400 text-xs">
+                                    <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin"></div>
+                                    <span>Loading...</span>
+                                  </div>
+                                );
+                              }
+
+                              // Not validated yet - show button
+                              return (
+                                <button
+                                  onClick={(e) => handleTeamValidate(e, opp, match.homeTeam, match.awayTeam)}
+                                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 hover:text-cyan-300 text-xs font-medium transition-all border border-cyan-500/30"
+                                  title="Check team historical stats"
+                                >
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                  </svg>
+                                  Load Team Stats
                                 </button>
                               );
                             })()}
