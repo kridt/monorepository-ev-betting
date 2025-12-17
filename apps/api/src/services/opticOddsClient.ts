@@ -310,6 +310,7 @@ export async function fetchOddsForFixtures(
 /**
  * Get all sportsbooks we need for EV calculation
  * Returns target books + sharp book + additional books for fair odds
+ * Optimized to use fewer books to reduce API calls and memory
  */
 export function getAllRequiredSportsbooks(): string[] {
   const allBooks = new Set<string>();
@@ -323,31 +324,17 @@ export function getAllRequiredSportsbooks(): string[] {
   allBooks.add(config.sharpBook);
 
   // Add common books for fair odds calculation
-  // We want 20-30 books for robust consensus
+  // Reduced from 24 to 15 books to save memory while maintaining accuracy
   const commonBooks = [
-    'bet365', // Not available, but include in case
-    'betano',
-    'unibet',
-    'betway',
-    'pinnacle',
-    'bet99',
-    'betfair',
+    'pinnacle',     // Sharp book (most important)
     'betmgm',
     'draftkings',
     'fanduel',
     'caesars',
     'bovada',
-    'betonline',
-    '888sport',
     'bwin',
-    'william_hill',
-    'ladbrokes',
-    'betsson',
-    'betcris',
     'betrivers',
-    'circa_sports',
-    'sbobet',
-    'bookmaker',
+    'bet365',
   ];
 
   for (const book of commonBooks) {

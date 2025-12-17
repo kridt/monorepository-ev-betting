@@ -18,6 +18,9 @@ import { config } from '../config.js';
 // NBA is ALWAYS included regardless of user settings
 const ALWAYS_INCLUDED_LEAGUES = ['nba'];
 
+// Memory optimization: Process fixtures in batches
+const FIXTURE_BATCH_SIZE = 20;
+
 /**
  * Main data pipeline that runs on schedule
  *
@@ -84,78 +87,98 @@ export async function runPipeline(): Promise<{
 
     console.info(`[Pipeline] Total pre-match fixtures to process: ${allFixtures.length}`);
 
-    // Process each fixture
-    const opportunities: EVOpportunity[] = [];
+    // Process fixtures in batches to manage memory
+    const allOpportunityIds: string[] = [];
 
-    for (const fixture of allFixtures) {
-      try {
-        fixturesProcessed++;
+    for (let batchStart = 0; batchStart < allFixtures.length; batchStart += FIXTURE_BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + FIXTURE_BATCH_SIZE, allFixtures.length);
+      const fixtureBatch = allFixtures.slice(batchStart, batchEnd);
 
-        // Fetch odds for this fixture
-        const oddsResponse = await fetchOdds(fixture.id, allSportsbooks);
+      console.info(`[Pipeline] Processing batch ${Math.floor(batchStart / FIXTURE_BATCH_SIZE) + 1}/${Math.ceil(allFixtures.length / FIXTURE_BATCH_SIZE)} (fixtures ${batchStart + 1}-${batchEnd})`);
 
-        if (oddsResponse.data.length === 0) {
-          continue;
-        }
+      // Process batch and collect opportunities
+      const batchOpportunities: EVOpportunity[] = [];
 
-        // Normalize all odds (filter out nulls from extreme odds)
-        const normalizedOdds: NormalizedOdds[] = [];
+      for (const fixture of fixtureBatch) {
+        try {
+          fixturesProcessed++;
 
-        for (const fixtureWithOdds of oddsResponse.data) {
-          for (const entry of fixtureWithOdds.odds) {
-            // Sportsbook is inside each odds entry
-            const sportsbookId = entry.sportsbook.toLowerCase().replace(/\s+/g, '_');
-            const normalized = normalizeOddsEntry(
-              entry,
-              fixture.id,
-              sportsbookId,
-              entry.sportsbook
-            );
-            // Skip odds that were filtered out (e.g., > 10.0 decimal)
-            if (normalized) {
-              normalizedOdds.push(normalized);
+          // Fetch odds for this fixture
+          const oddsResponse = await fetchOdds(fixture.id, allSportsbooks);
+
+          if (oddsResponse.data.length === 0) {
+            continue;
+          }
+
+          // Normalize all odds (filter out nulls from extreme odds)
+          const normalizedOdds: NormalizedOdds[] = [];
+
+          for (const fixtureWithOdds of oddsResponse.data) {
+            for (const entry of fixtureWithOdds.odds) {
+              // Sportsbook is inside each odds entry
+              const sportsbookId = entry.sportsbook.toLowerCase().replace(/\s+/g, '_');
+              const normalized = normalizeOddsEntry(
+                entry,
+                fixture.id,
+                sportsbookId,
+                entry.sportsbook
+              );
+              // Skip odds that were filtered out (e.g., > 10.0 decimal)
+              if (normalized) {
+                normalizedOdds.push(normalized);
+              }
             }
           }
-        }
 
-        // Group by selection
-        const groupedOdds = groupOddsBySelection(normalizedOdds, targetBookIds, sharpBookId);
+          // Group by selection
+          const groupedOdds = groupOddsBySelection(normalizedOdds, targetBookIds, sharpBookId);
 
-        // Calculate opportunities for each grouped selection
-        for (const group of groupedOdds) {
-          const opportunity = calculateOpportunities(
-            group,
-            {
-              sport: fixture.sport,
-              league: fixture.league,
-              homeTeam: fixture.home_team,
-              awayTeam: fixture.away_team,
-              startsAt: fixture.start_date,
-            },
-            targetBookIds
-          );
+          // Calculate opportunities for each grouped selection
+          for (const group of groupedOdds) {
+            const opportunity = calculateOpportunities(
+              group,
+              {
+                sport: fixture.sport,
+                league: fixture.league,
+                homeTeam: fixture.home_team,
+                awayTeam: fixture.away_team,
+                startsAt: fixture.start_date,
+              },
+              targetBookIds
+            );
 
-          if (opportunity) {
-            opportunities.push(opportunity);
-            opportunitiesFound++;
+            if (opportunity) {
+              batchOpportunities.push(opportunity);
+              opportunitiesFound++;
+            }
           }
+        } catch (error) {
+          const msg = `Error processing fixture ${fixture.id}: ${error}`;
+          console.error(`[Pipeline] ${msg}`);
+          errors.push(msg);
         }
-      } catch (error) {
-        const msg = `Error processing fixture ${fixture.id}: ${error}`;
-        console.error(`[Pipeline] ${msg}`);
-        errors.push(msg);
       }
+
+      // Persist batch opportunities immediately to free memory
+      if (batchOpportunities.length > 0) {
+        await persistOpportunities(batchOpportunities);
+        allOpportunityIds.push(...batchOpportunities.map(o => o.id));
+        console.info(`[Pipeline] Batch complete: ${batchOpportunities.length} opportunities persisted`);
+      }
+
+      // Clear batch array to help garbage collection
+      batchOpportunities.length = 0;
     }
 
     console.info(`[Pipeline] Found ${opportunitiesFound} opportunities above ${config.minEvPercent}% EV`);
 
-    // Persist opportunities to database
-    await persistOpportunities(opportunities);
-
     // Validate NBA player props in background (don't block pipeline)
-    validateNBAOpportunities(opportunities).catch(err => {
-      console.error('[Pipeline] Error validating NBA opportunities:', err);
-    });
+    // Only pass IDs to reduce memory - validation will query DB
+    if (allOpportunityIds.length > 0) {
+      validateNBAOpportunitiesById(allOpportunityIds).catch(err => {
+        console.error('[Pipeline] Error validating NBA opportunities:', err);
+      });
+    }
 
     // Clean up stale data
     await cleanupStaleData();
@@ -307,53 +330,62 @@ function extractPlayerName(selection: string, playerName?: string): string | und
 }
 
 /**
- * Validate NBA player prop opportunities and store results
- * Runs in background after opportunities are persisted
+ * Validate NBA player prop opportunities by ID (memory-optimized)
+ * Queries DB for needed data instead of keeping full objects in memory
  */
-async function validateNBAOpportunities(opportunities: EVOpportunity[]): Promise<void> {
-  // Filter to NBA player props only
-  const nbaPlayerProps = opportunities.filter(opp =>
-    opp.sport === 'basketball' &&
-    opp.line !== undefined &&
-    isPlayerProp(opp.market)
-  );
+async function validateNBAOpportunitiesById(opportunityIds: string[]): Promise<void> {
+  if (opportunityIds.length === 0) return;
 
-  if (nbaPlayerProps.length === 0) {
-    return;
-  }
+  // Query NBA player props that need validation in small batches
+  const toValidate: Array<{
+    id: string;
+    selection: string;
+    market: string;
+    line: number | null;
+    playerName: string | null;
+    bestEvPercent: number;
+  }> = [];
 
-  // Get IDs of opportunities that already have validation data
-  const oppIds = nbaPlayerProps.map(opp => opp.id);
-  const alreadyValidated = new Set<string>();
-
-  try {
-    // Query in batches to avoid too large IN clause
-    for (let i = 0; i < oppIds.length; i += 100) {
-      const batchIds = oppIds.slice(i, i + 100);
-      const existing = await db.query.opportunities.findMany({
+  // Query in batches of 100
+  for (let i = 0; i < opportunityIds.length; i += 100) {
+    const batchIds = opportunityIds.slice(i, i + 100);
+    try {
+      const batch = await db.query.opportunities.findMany({
         where: and(
           inArray(schema.opportunities.id, batchIds),
-          sql`${schema.opportunities.nbaValidationJson} IS NOT NULL`
+          eq(schema.opportunities.sport, 'basketball'),
+          isNull(schema.opportunities.nbaValidationJson)
         ),
-        columns: { id: true },
+        columns: {
+          id: true,
+          selection: true,
+          market: true,
+          line: true,
+          playerName: true,
+          bestEvPercent: true,
+        },
       });
-      existing.forEach(e => alreadyValidated.add(e.id));
+
+      // Filter to player props
+      for (const opp of batch) {
+        if (opp.line !== null && isPlayerProp(opp.market)) {
+          toValidate.push(opp);
+        }
+      }
+    } catch (error) {
+      console.error('[Pipeline] Error querying opportunities for validation:', error);
     }
-  } catch (error) {
-    console.error('[Pipeline] Error checking existing validations:', error);
   }
 
-  // Filter out already validated and sort by EV (highest first)
-  const toValidate = nbaPlayerProps
-    .filter(opp => !alreadyValidated.has(opp.id))
-    .sort((a, b) => b.bestEV.evPercent - a.bestEV.evPercent);
-
   if (toValidate.length === 0) {
-    console.info(`[Pipeline] All ${nbaPlayerProps.length} NBA player props already validated`);
+    console.info('[Pipeline] No NBA player props need validation');
     return;
   }
 
-  console.info(`[Pipeline] Validating ${toValidate.length} NBA player props (${alreadyValidated.size} already done, prioritizing high EV)...`);
+  // Sort by EV (highest first)
+  toValidate.sort((a, b) => b.bestEvPercent - a.bestEvPercent);
+
+  console.info(`[Pipeline] Validating ${toValidate.length} NBA player props...`);
 
   // Process in batches - Ball Don't Lie free tier allows 30 req/min
   const batchSize = 10;
@@ -365,7 +397,7 @@ async function validateNBAOpportunities(opportunities: EVOpportunity[]): Promise
     await Promise.all(
       batch.map(async (opp) => {
         try {
-          const playerName = extractPlayerName(opp.selection, opp.playerName);
+          const playerName = extractPlayerName(opp.selection, opp.playerName ?? undefined);
           if (!playerName) return;
 
           // Determine direction from selection
