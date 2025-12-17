@@ -7,7 +7,21 @@ import type {
   MethodsResponse,
   FixtureStats,
   ValidationResult,
+  EVOpportunitySummary,
 } from '@ev-bets/shared';
+
+// Re-export the opportunity type for use in other parts of the app
+export type OpportunityResponse = EVOpportunitySummary & {
+  // Extended with bestEV for tracking service compatibility
+  bestEV: {
+    targetBookId: string;
+    targetBookName: string;
+    offeredOdds: number;
+    fairOdds: number;
+    evPercent: number;
+    method: string;
+  };
+};
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:4000';
 

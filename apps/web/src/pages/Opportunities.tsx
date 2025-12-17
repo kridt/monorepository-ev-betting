@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, type NBAValidationResult } from '../api/client';
+import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, type NBAValidationResult, type OpportunityResponse } from '../api/client';
 // NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
+import { useTracking } from '../hooks/useTracking';
 import type { FixtureStats, ValidationResult, BookOdds } from '@ev-bets/shared';
 import clsx from 'clsx';
 
@@ -222,6 +223,7 @@ function groupByMatch(opportunities: Opportunity[], sortBy: MatchSortOption = 's
 
 export default function Opportunities() {
   const { settings, updateFilters } = useSettings();
+  const { isTracked, toggleTrack, trackAllForFixture, isLoading: isTrackingLoading } = useTracking();
 
   const [filters, setFilters] = useState({
     sport: settings.filters.sport || '',
@@ -840,7 +842,7 @@ export default function Opportunities() {
                     </div>
                   </div>
 
-                  {/* Stats & Arrow */}
+                  {/* Stats & Actions */}
                   <div className="flex items-center gap-4">
                     {/* Opportunity Count */}
                     <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-800/50">
@@ -864,6 +866,27 @@ export default function Opportunities() {
                     )}>
                       +{match.bestEV.toFixed(1)}%
                     </div>
+
+                    {/* Track All Button */}
+                    <button
+                      onClick={() => trackAllForFixture(match.opportunities as unknown as OpportunityResponse[], match.fixtureId)}
+                      disabled={isTrackingLoading(`fixture-${match.fixtureId}`)}
+                      className={clsx(
+                        'flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-300',
+                        'bg-emerald-500/20 text-emerald-400 hover:bg-emerald-500/30 border border-emerald-500/30',
+                        'disabled:opacity-50 disabled:cursor-not-allowed'
+                      )}
+                      title="Track all bets for this match"
+                    >
+                      {isTrackingLoading(`fixture-${match.fixtureId}`) ? (
+                        <div className="w-4 h-4 border-2 border-emerald-400/30 border-t-emerald-400 rounded-full animate-spin"></div>
+                      ) : (
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                      )}
+                      <span className="hidden lg:inline">Track All</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1033,6 +1056,33 @@ export default function Opportunities() {
 
                           {/* Row 5: Actions & Validation */}
                           <div className="flex items-center gap-3">
+                            {/* Track Button */}
+                            <button
+                              onClick={() => toggleTrack(opp as unknown as OpportunityResponse)}
+                              disabled={isTrackingLoading(opp.id)}
+                              className={clsx(
+                                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300',
+                                isTracked(opp.id)
+                                  ? 'bg-emerald-500/30 text-emerald-300 border border-emerald-500/40 hover:bg-red-500/20 hover:text-red-300 hover:border-red-500/40'
+                                  : 'bg-slate-700/50 text-slate-400 hover:bg-emerald-500/20 hover:text-emerald-300 border border-slate-600/50 hover:border-emerald-500/40',
+                                'disabled:opacity-50 disabled:cursor-not-allowed'
+                              )}
+                              title={isTracked(opp.id) ? 'Untrack this bet' : 'Track this bet'}
+                            >
+                              {isTrackingLoading(opp.id) ? (
+                                <div className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin"></div>
+                              ) : isTracked(opp.id) ? (
+                                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                                  <path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"></path>
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path>
+                                </svg>
+                              )}
+                              <span>{isTracked(opp.id) ? 'Tracked' : 'Track'}</span>
+                            </button>
+
                             {/* NBA Validation (for basketball player props) - Pre-computed from server */}
                             {match.sport === 'basketball' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && (() => {
                               const nbaValidation = opp.nbaValidation;

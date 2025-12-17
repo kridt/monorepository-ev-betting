@@ -56,7 +56,7 @@ PORT=4000
 DB_PATH=./data/dev.db
 REFRESH_INTERVAL_MS=120000
 MIN_EV_PERCENT=5
-TARGET_SPORTSBOOKS=betano,unibet,betway
+TARGET_SPORTSBOOKS=betano,unibet,betway,leovegas,betsson
 SHARP_BOOK=pinnacle
 SOCCER_LEAGUES=england_-_premier_league,spain_-_la_liga
 BASKETBALL_LEAGUES=usa_-_nba
@@ -68,6 +68,8 @@ Currently configured targets:
 - **Betano** (`betano`)
 - **Unibet** (`unibet`)
 - **Betway** (`betway`)
+- **LeoVegas** (`leovegas`)
+- **Betsson** (`betsson`)
 
 Sharp book reference: **Pinnacle** (`pinnacle`)
 

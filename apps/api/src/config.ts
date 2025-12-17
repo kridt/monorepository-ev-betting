@@ -1,5 +1,5 @@
 import { config as dotenvConfig } from 'dotenv';
-import { AppConfigSchema, DEFAULT_SOCCER_LEAGUES, DEFAULT_BASKETBALL_LEAGUES } from '@ev-bets/shared';
+import { AppConfigSchema, DEFAULT_SOCCER_LEAGUES, DEFAULT_BASKETBALL_LEAGUES, DEFAULT_TARGET_SPORTSBOOKS } from '@ev-bets/shared';
 
 // Load .env file
 dotenvConfig();
@@ -55,7 +55,7 @@ const rawConfig = {
   minEvPercent: getEnvNumber('MIN_EV_PERCENT', 5),
   defaultMethod: 'TRIMMED_MEAN_PROB' as const,
 
-  targetSportsbooks: getEnvArray('TARGET_SPORTSBOOKS', ['betano', 'unibet', 'betway']),
+  targetSportsbooks: getEnvArray('TARGET_SPORTSBOOKS', [...DEFAULT_TARGET_SPORTSBOOKS]),
   sharpBook: getEnvVar('SHARP_BOOK', 'pinnacle'),
 
   soccerLeagues: getEnvArray('SOCCER_LEAGUES', [...DEFAULT_SOCCER_LEAGUES]),

@@ -131,7 +131,7 @@ export const DEFAULT_SOCCER_LEAGUES = [
 export const DEFAULT_BASKETBALL_LEAGUES = ['nba'];
 
 // Target sportsbooks (user configurable)
-export const DEFAULT_TARGET_SPORTSBOOKS = ['betano', 'unibet', 'betway'];
+export const DEFAULT_TARGET_SPORTSBOOKS = ['betano', 'unibet', 'betway', 'leovegas', 'betsson'];
 
 // Sharp book for reference
 export const SHARP_BOOK_ID = 'pinnacle';

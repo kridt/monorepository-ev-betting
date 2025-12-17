@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import Dashboard from './pages/Dashboard';
 import Opportunities from './pages/Opportunities';
 import OpportunityDetail from './pages/OpportunityDetail';
+import TrackedBets from './pages/TrackedBets';
 import Settings from './pages/Settings';
 import { fetchHealth } from './api/client';
 import clsx from 'clsx';
@@ -84,6 +85,29 @@ function App() {
                 )}
               </NavLink>
               <NavLink
+                to="/tracked"
+                className={({ isActive }) =>
+                  clsx(
+                    'nav-link relative px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-300',
+                    isActive
+                      ? 'text-white bg-gradient-to-r from-emerald-600/20 to-cyan-600/20'
+                      : 'text-dark-400 hover:text-white hover:bg-dark-800/50'
+                  )
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <span className="flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"></path>
+                      </svg>
+                      Tracked
+                    </span>
+                    {isActive && <span className="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-gradient-to-r from-emerald-500 to-cyan-500 rounded-full"></span>}
+                  </>
+                )}
+              </NavLink>
+              <NavLink
                 to="/settings"
                 className={({ isActive }) =>
                   clsx(
@@ -148,6 +172,7 @@ function App() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/opportunities" element={<Opportunities />} />
           <Route path="/opportunities/:id" element={<OpportunityDetail />} />
+          <Route path="/tracked" element={<TrackedBets />} />
           <Route path="/settings" element={<Settings />} />
         </Routes>
       </main>

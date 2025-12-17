@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FAIR_ODDS_METHODS } from '../constants.js';
+import { FAIR_ODDS_METHODS, DEFAULT_TARGET_SPORTSBOOKS } from '../constants.js';
 
 // Application configuration
 export const AppConfigSchema = z.object({
@@ -30,7 +30,7 @@ export const AppConfigSchema = z.object({
   defaultMethod: z.enum(FAIR_ODDS_METHODS).default('TRIMMED_MEAN_PROB'),
 
   // Sportsbooks
-  targetSportsbooks: z.array(z.string()).default(['betano', 'unibet', 'betway']),
+  targetSportsbooks: z.array(z.string()).default([...DEFAULT_TARGET_SPORTSBOOKS]),
   sharpBook: z.string().default('pinnacle'),
 
   // Leagues
