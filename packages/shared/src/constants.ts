@@ -77,15 +77,55 @@ export const DEFAULT_CONFIG = {
   RETRY_BASE_DELAY_MS: 1000,
 } as const;
 
-// Default leagues
+// Default leagues (27 leagues covered by SportMonks)
 export const DEFAULT_SOCCER_LEAGUES = [
+  // Austria
+  'austria_-_bundesliga',
+  // Belgium
+  'belgium_-_jupiler_pro_league',
+  // Croatia
+  'croatia_-_1_hnl',
+  // Denmark
+  'denmark_-_superliga',
+  // England
   'england_-_premier_league',
-  'spain_-_la_liga',
-  'italy_-_serie_a',
-  'germany_-_bundesliga',
-  'france_-_ligue_1',
-  'uefa_-_champions_league',
+  'england_-_championship',
+  'england_-_fa_cup',
+  'england_-_league_cup',
+  // Europe
   'uefa_-_europa_league',
+  // France
+  'france_-_ligue_1',
+  // Germany
+  'germany_-_bundesliga',
+  // Italy
+  'italy_-_serie_a',
+  'italy_-_serie_b',
+  'italy_-_coppa_italia',
+  // Netherlands
+  'netherlands_-_eredivisie',
+  // Norway
+  'norway_-_eliteserien',
+  // Poland
+  'poland_-_ekstraklasa',
+  // Portugal
+  'portugal_-_primeira_liga',
+  // Russia
+  'russia_-_premier_league',
+  // Scotland
+  'scotland_-_premiership',
+  // Spain
+  'spain_-_la_liga',
+  'spain_-_la_liga_2',
+  'spain_-_copa_del_rey',
+  // Sweden
+  'sweden_-_allsvenskan',
+  // Switzerland
+  'switzerland_-_super_league',
+  // Turkey
+  'turkey_-_super_lig',
+  // Ukraine
+  'ukraine_-_premier_league',
 ];
 
 export const DEFAULT_BASKETBALL_LEAGUES = ['nba'];
