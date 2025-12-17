@@ -6,7 +6,7 @@ const API_KEY = config.ballDontLieApiKey;
 
 // Simple in-memory cache
 const cache = new Map<string, { data: unknown; expiresAt: number }>();
-const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes (shorter for fresher data)
 
 function getCached<T>(key: string): T | null {
   const cached = cache.get(key);
@@ -381,13 +381,16 @@ export async function getPlayerGameStats(
   // NBA season spans Oct-June, so if before October, use previous year
   const season = currentMonth < 9 ? currentYear - 1 : currentYear;
 
-  // Fetch stats with per_page set to limit
+  // Fetch MORE stats than needed (API returns oldest first by default)
+  // Then we'll sort by date and take the most recent ones
+  const fetchLimit = Math.max(100, limit * 3);
+
   const stats = await fetchWithRetry<BDLGameStats[]>(
     '/v1/stats',
     {
       player_ids: [String(playerId)],
       seasons: [String(season)],
-      per_page: String(limit),
+      per_page: String(fetchLimit),
     }
   );
 
@@ -404,10 +407,17 @@ export async function getPlayerGameStats(
     return [];
   }
 
-  // Sort by game date descending and take last N games
+  // Sort by game date descending (most recent first) and take last N games
   const sorted = validStats.sort((a, b) =>
     new Date(b.game.date).getTime() - new Date(a.game.date).getTime()
   ).slice(0, limit);
+
+  safeLog('Got player stats', {
+    playerId,
+    totalFetched: validStats.length,
+    returned: sorted.length,
+    latestGame: sorted[0]?.game?.date
+  });
 
   setCache(cacheKey, sorted);
   return sorted;
