@@ -4,6 +4,7 @@ import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, 
 // NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
+import { useRemoved } from '../hooks/useRemoved';
 import type { FixtureStats, ValidationResult, BookOdds } from '@ev-bets/shared';
 import clsx from 'clsx';
 
@@ -223,7 +224,8 @@ function groupByMatch(opportunities: Opportunity[], sortBy: MatchSortOption = 's
 
 export default function Opportunities() {
   const { settings, updateFilters } = useSettings();
-  const { isTracked, toggleTrack, trackAllForFixture, isLoading: isTrackingLoading } = useTracking();
+  const { trackedIds, isTracked, toggleTrack, trackAllForFixture, isLoading: isTrackingLoading } = useTracking();
+  const { removedIds, isRemoved, remove, removeAllForFixture } = useRemoved();
 
   const [filters, setFilters] = useState({
     sport: settings.filters.sport || '',
@@ -344,9 +346,13 @@ export default function Opportunities() {
 
   const groupedMatches = useMemo(() => {
     if (!data?.data) return [];
+    // Filter out tracked and removed bets
+    const filteredData = data.data.filter(
+      opp => !trackedIds.has(opp.id) && !removedIds.has(opp.id)
+    );
     // Group by match, sort by selected option, and limit to 10 matches
-    return groupByMatch(data.data, filters.sortBy).slice(0, 10);
-  }, [data?.data, filters.sortBy]);
+    return groupByMatch(filteredData, filters.sortBy).slice(0, 10);
+  }, [data?.data, filters.sortBy, trackedIds, removedIds]);
 
   // Get soccer fixture IDs for stats fetching
   const soccerFixtureIds = useMemo(() => {
@@ -887,6 +893,21 @@ export default function Opportunities() {
                       )}
                       <span className="hidden lg:inline">Track All</span>
                     </button>
+
+                    {/* Remove All Button */}
+                    <button
+                      onClick={() => removeAllForFixture(match.opportunities, match.fixtureId)}
+                      className={clsx(
+                        'flex items-center gap-2 px-3 py-2 rounded-xl text-sm font-medium transition-all duration-300',
+                        'bg-slate-700/50 text-slate-400 hover:bg-red-500/20 hover:text-red-400 border border-slate-600/50 hover:border-red-500/30'
+                      )}
+                      title="Hide all bets for this match"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                      </svg>
+                      <span className="hidden lg:inline">Hide All</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1081,6 +1102,18 @@ export default function Opportunities() {
                                 </svg>
                               )}
                               <span>{isTracked(opp.id) ? 'Tracked' : 'Track'}</span>
+                            </button>
+
+                            {/* Hide Button */}
+                            <button
+                              onClick={() => remove(opp)}
+                              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300 bg-slate-700/50 text-slate-400 hover:bg-red-500/20 hover:text-red-400 border border-slate-600/50 hover:border-red-500/30"
+                              title="Hide this bet (can restore later)"
+                            >
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                              </svg>
+                              <span>Hide</span>
                             </button>
 
                             {/* NBA Validation (for basketball player props) - Pre-computed from server */}
