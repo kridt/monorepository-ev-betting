@@ -1,5 +1,5 @@
 import { config as dotenvConfig } from 'dotenv';
-import { AppConfigSchema } from '@ev-bets/shared';
+import { AppConfigSchema, DEFAULT_SOCCER_LEAGUES, DEFAULT_BASKETBALL_LEAGUES } from '@ev-bets/shared';
 
 // Load .env file
 dotenvConfig();
@@ -58,14 +58,8 @@ const rawConfig = {
   targetSportsbooks: getEnvArray('TARGET_SPORTSBOOKS', ['betano', 'unibet', 'betway']),
   sharpBook: getEnvVar('SHARP_BOOK', 'pinnacle'),
 
-  soccerLeagues: getEnvArray('SOCCER_LEAGUES', [
-    'england_-_premier_league',
-    'spain_-_la_liga',
-    'italy_-_serie_a',
-    'germany_-_bundesliga',
-    'france_-_ligue_1',
-  ]),
-  basketballLeagues: getEnvArray('BASKETBALL_LEAGUES', ['nba']),
+  soccerLeagues: getEnvArray('SOCCER_LEAGUES', [...DEFAULT_SOCCER_LEAGUES]),
+  basketballLeagues: getEnvArray('BASKETBALL_LEAGUES', [...DEFAULT_BASKETBALL_LEAGUES]),
 
   maxConcurrentRequests: getEnvNumber('MAX_CONCURRENT_REQUESTS', 5),
   maxSportsbooksPerRequest: 5,
