@@ -225,10 +225,14 @@ async function testTeamSearch() {
 
   for (const tc of testCases) {
     const team = await searchTeam(tc.input);
-    const passed = team !== null && (
-      ('expectedId' in tc && team.id === tc.expectedId) ||
-      ('expectedName' in tc && team.name.toLowerCase().includes(tc.expectedName.toLowerCase()))
-    );
+    let passed = false;
+    if (team !== null) {
+      if ('expectedId' in tc && team.id === tc.expectedId) {
+        passed = true;
+      } else if ('expectedName' in tc && tc.expectedName && team.name.toLowerCase().includes(tc.expectedName.toLowerCase())) {
+        passed = true;
+      }
+    }
     logTest(
       `Team Search: ${tc.input}`,
       passed,
