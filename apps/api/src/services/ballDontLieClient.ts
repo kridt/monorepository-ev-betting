@@ -367,7 +367,7 @@ export async function searchPlayer(name: string): Promise<BDLPlayer | null> {
  */
 export async function getPlayerGameStats(
   playerId: number,
-  limit: number = 10
+  limit: number = 20
 ): Promise<BDLGameStats[]> {
   const cacheKey = `bdl-stats:${playerId}:${limit}`;
   const cached = getCached<BDLGameStats[]>(cacheKey);
@@ -570,7 +570,7 @@ export async function validateNBAPlayerBet(
   market: string,
   line: number,
   direction: 'over' | 'under',
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<NBAValidationResult | null> {
   // Find the player
   const player = await searchPlayer(playerName);
@@ -663,7 +663,7 @@ export async function batchValidateNBABets(
     direction: 'over' | 'under';
     opportunityId: string;
   }>,
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<Map<string, NBAValidationResult | null>> {
   const results = new Map<string, NBAValidationResult | null>();
 
@@ -704,4 +704,354 @@ export async function batchValidateNBABets(
 export function clearCache(): void {
   cache.clear();
   safeLog('Cache cleared');
+}
+
+// ============================================================================
+// TEAM & SPREAD VALIDATION
+// ============================================================================
+
+interface BDLTeam {
+  id: number;
+  conference: string;
+  division: string;
+  city: string;
+  name: string;
+  full_name: string;
+  abbreviation: string;
+}
+
+interface BDLGame {
+  id: number;
+  date: string;
+  season: number;
+  status: string;
+  period: number;
+  time: string;
+  postseason: boolean;
+  home_team_score: number;
+  visitor_team_score: number;
+  home_team: BDLTeam;
+  visitor_team: BDLTeam;
+}
+
+// Team name mappings for common variations
+const TEAM_NAME_ALIASES: Record<string, string[]> = {
+  'hawks': ['atlanta hawks', 'atlanta', 'hawks', 'atl'],
+  'celtics': ['boston celtics', 'boston', 'celtics', 'bos'],
+  'nets': ['brooklyn nets', 'brooklyn', 'nets', 'bkn'],
+  'hornets': ['charlotte hornets', 'charlotte', 'hornets', 'cha'],
+  'bulls': ['chicago bulls', 'chicago', 'bulls', 'chi'],
+  'cavaliers': ['cleveland cavaliers', 'cleveland', 'cavaliers', 'cavs', 'cle'],
+  'mavericks': ['dallas mavericks', 'dallas', 'mavericks', 'mavs', 'dal'],
+  'nuggets': ['denver nuggets', 'denver', 'nuggets', 'den'],
+  'pistons': ['detroit pistons', 'detroit', 'pistons', 'det'],
+  'warriors': ['golden state warriors', 'golden state', 'warriors', 'gsw', 'gs'],
+  'rockets': ['houston rockets', 'houston', 'rockets', 'hou'],
+  'pacers': ['indiana pacers', 'indiana', 'pacers', 'ind'],
+  'clippers': ['los angeles clippers', 'la clippers', 'clippers', 'lac'],
+  'lakers': ['los angeles lakers', 'la lakers', 'lakers', 'lal'],
+  'grizzlies': ['memphis grizzlies', 'memphis', 'grizzlies', 'mem'],
+  'heat': ['miami heat', 'miami', 'heat', 'mia'],
+  'bucks': ['milwaukee bucks', 'milwaukee', 'bucks', 'mil'],
+  'timberwolves': ['minnesota timberwolves', 'minnesota', 'timberwolves', 'wolves', 'min'],
+  'pelicans': ['new orleans pelicans', 'new orleans', 'pelicans', 'nop', 'no'],
+  'knicks': ['new york knicks', 'new york', 'knicks', 'nyk', 'ny'],
+  'thunder': ['oklahoma city thunder', 'oklahoma city', 'thunder', 'okc'],
+  'magic': ['orlando magic', 'orlando', 'magic', 'orl'],
+  '76ers': ['philadelphia 76ers', 'philadelphia', '76ers', 'sixers', 'phi', 'philly'],
+  'suns': ['phoenix suns', 'phoenix', 'suns', 'phx'],
+  'trail blazers': ['portland trail blazers', 'portland', 'trail blazers', 'blazers', 'por'],
+  'kings': ['sacramento kings', 'sacramento', 'kings', 'sac'],
+  'spurs': ['san antonio spurs', 'san antonio', 'spurs', 'sas', 'sa'],
+  'raptors': ['toronto raptors', 'toronto', 'raptors', 'tor'],
+  'jazz': ['utah jazz', 'utah', 'jazz', 'uta'],
+  'wizards': ['washington wizards', 'washington', 'wizards', 'was', 'wsh'],
+};
+
+/**
+ * Get all NBA teams (cached)
+ */
+async function getAllTeams(): Promise<BDLTeam[]> {
+  const cacheKey = 'bdl-all-teams';
+  const cached = getCached<BDLTeam[]>(cacheKey);
+  if (cached) return cached;
+
+  safeLog('Fetching all NBA teams');
+
+  const teams = await fetchWithRetry<BDLTeam[]>('/v1/teams', { per_page: '30' });
+
+  if (!teams || teams.length === 0) {
+    safeLog('No teams found');
+    return [];
+  }
+
+  setCache(cacheKey, teams);
+  return teams;
+}
+
+/**
+ * Search for NBA team by name
+ */
+export async function searchTeam(teamName: string): Promise<BDLTeam | null> {
+  const cacheKey = `bdl-team:${teamName.toLowerCase()}`;
+  const cached = getCached<BDLTeam>(cacheKey);
+  if (cached) return cached;
+
+  safeLog('Searching for team', { teamName });
+
+  const teams = await getAllTeams();
+  if (teams.length === 0) return null;
+
+  const searchName = teamName.toLowerCase().trim();
+
+  // Try exact matches first
+  let team = teams.find(t =>
+    t.full_name.toLowerCase() === searchName ||
+    t.name.toLowerCase() === searchName ||
+    t.city.toLowerCase() === searchName ||
+    t.abbreviation.toLowerCase() === searchName
+  );
+
+  // Try partial matches
+  if (!team) {
+    team = teams.find(t =>
+      t.full_name.toLowerCase().includes(searchName) ||
+      searchName.includes(t.name.toLowerCase()) ||
+      searchName.includes(t.city.toLowerCase())
+    );
+  }
+
+  // Try aliases
+  if (!team) {
+    for (const [canonical, aliases] of Object.entries(TEAM_NAME_ALIASES)) {
+      if (aliases.some(alias => searchName.includes(alias) || alias.includes(searchName))) {
+        team = teams.find(t => t.name.toLowerCase() === canonical);
+        if (team) break;
+      }
+    }
+  }
+
+  if (team) {
+    safeLog('Found team', { searchName, found: team.full_name, id: team.id });
+    setCache(cacheKey, team);
+    return team;
+  }
+
+  safeLog('Team not found', { searchName });
+  return null;
+}
+
+/**
+ * Get recent games for a team
+ */
+export async function getTeamGames(
+  teamId: number,
+  limit: number = 20
+): Promise<BDLGame[]> {
+  const cacheKey = `bdl-team-games:${teamId}:${limit}`;
+  const cached = getCached<BDLGame[]>(cacheKey);
+  if (cached) return cached;
+
+  safeLog('Fetching team games', { teamId, limit });
+
+  // Get current season
+  const currentYear = new Date().getFullYear();
+  const currentMonth = new Date().getMonth();
+  const season = currentMonth < 9 ? currentYear - 1 : currentYear;
+
+  // Fetch more than needed to account for filtering
+  const fetchLimit = Math.max(100, limit * 3);
+
+  const games = await fetchWithRetry<BDLGame[]>(
+    '/v1/games',
+    {
+      team_ids: [String(teamId)],
+      seasons: [String(season)],
+      per_page: String(fetchLimit),
+    }
+  );
+
+  if (!games || !Array.isArray(games)) {
+    safeLog('No games found', { teamId });
+    return [];
+  }
+
+  // Filter to only completed games and sort by date descending
+  const completedGames = games
+    .filter(g => g.status === 'Final' && g.home_team_score > 0 && g.visitor_team_score > 0)
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, limit);
+
+  safeLog('Got team games', {
+    teamId,
+    total: games.length,
+    completed: completedGames.length,
+    latestGame: completedGames[0]?.date
+  });
+
+  setCache(cacheKey, completedGames);
+  return completedGames;
+}
+
+/**
+ * Spread validation result
+ */
+export interface SpreadValidationResult {
+  teamName: string;
+  teamId: number;
+  line: number;
+  direction: 'over' | 'under';
+  matchesChecked: number;
+  hits: number;
+  hitRate: number; // 0-100
+  avgMargin: number; // Average point differential for the team
+  recentGames: {
+    date: string;
+    opponent: string;
+    teamScore: number;
+    opponentScore: number;
+    margin: number;
+    covered: boolean;
+    isHome: boolean;
+  }[];
+}
+
+/**
+ * Validate NBA team spread bet against historical data
+ *
+ * For spread bets:
+ * - Line is the spread (e.g., -8.5 means team is 8.5 point favorite)
+ * - "Over" the spread means team covers (wins by more than spread)
+ * - "Under" the spread means team doesn't cover
+ *
+ * Example: Hawks -8.5
+ * - Over: Hawks win by 9+ points
+ * - Under: Hawks win by 8 or less, or lose
+ */
+export async function validateSpreadBet(
+  teamName: string,
+  line: number,
+  direction: 'over' | 'under',
+  matchCount: number = 20
+): Promise<SpreadValidationResult | null> {
+  // Find the team
+  const team = await searchTeam(teamName);
+  if (!team) {
+    safeLog('Team not found for spread validation', { teamName });
+    return null;
+  }
+
+  // Get recent games
+  const games = await getTeamGames(team.id, matchCount);
+  if (games.length === 0) {
+    safeLog('No games found for spread validation', { teamName });
+    return null;
+  }
+
+  // Calculate spread coverage for each game
+  const recentGames: SpreadValidationResult['recentGames'] = [];
+  let hits = 0;
+  let totalMargin = 0;
+
+  for (const game of games) {
+    const isHome = game.home_team.id === team.id;
+    const teamScore = isHome ? game.home_team_score : game.visitor_team_score;
+    const opponentScore = isHome ? game.visitor_team_score : game.home_team_score;
+    const opponent = isHome ? game.visitor_team.full_name : game.home_team.full_name;
+
+    // Margin from team's perspective (positive = won, negative = lost)
+    const margin = teamScore - opponentScore;
+    totalMargin += margin;
+
+    // Did they cover the spread?
+    // For a -8.5 spread (favorite), margin needs to be > 8.5 to cover
+    // For a +8.5 spread (underdog), margin needs to be > -8.5 to cover
+    const covered = margin > line;
+
+    // Hit depends on direction:
+    // - "over" (betting they cover): hit if covered
+    // - "under" (betting they don't cover): hit if not covered
+    const hit = direction === 'over' ? covered : !covered;
+    if (hit) hits++;
+
+    recentGames.push({
+      date: game.date,
+      opponent,
+      teamScore,
+      opponentScore,
+      margin,
+      covered,
+      isHome,
+    });
+  }
+
+  const gamesChecked = recentGames.length;
+  if (gamesChecked === 0) return null;
+
+  return {
+    teamName: team.full_name,
+    teamId: team.id,
+    line,
+    direction,
+    matchesChecked: gamesChecked,
+    hits,
+    hitRate: Math.round((hits / gamesChecked) * 100),
+    avgMargin: Math.round((totalMargin / gamesChecked) * 10) / 10,
+    recentGames,
+  };
+}
+
+/**
+ * Validate moneyline bet (team to win)
+ */
+export async function validateMoneylineBet(
+  teamName: string,
+  matchCount: number = 20
+): Promise<SpreadValidationResult | null> {
+  // Moneyline is essentially spread of 0 with "over" direction (team needs positive margin)
+  return validateSpreadBet(teamName, 0, 'over', matchCount);
+}
+
+/**
+ * Batch validate spread/moneyline bets
+ */
+export async function batchValidateSpreadBets(
+  bets: Array<{
+    teamName: string;
+    line: number;
+    direction: 'over' | 'under';
+    opportunityId: string;
+  }>,
+  matchCount: number = 20
+): Promise<Map<string, SpreadValidationResult | null>> {
+  const results = new Map<string, SpreadValidationResult | null>();
+
+  // Process in batches to respect rate limits
+  const batchSize = 5;
+  for (let i = 0; i < bets.length; i += batchSize) {
+    const batch = bets.slice(i, i + batchSize);
+
+    const batchResults = await Promise.all(
+      batch.map(async bet => {
+        const result = await validateSpreadBet(
+          bet.teamName,
+          bet.line,
+          bet.direction,
+          matchCount
+        );
+        return { id: bet.opportunityId, result };
+      })
+    );
+
+    for (const { id, result } of batchResults) {
+      results.set(id, result);
+    }
+
+    // Small delay between batches
+    if (i + batchSize < bets.length) {
+      await sleep(200);
+    }
+  }
+
+  return results;
 }

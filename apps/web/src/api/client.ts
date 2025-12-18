@@ -89,6 +89,48 @@ export async function fetchOpportunityDetail(id: string): Promise<OpportunityDet
   return fetchJSON(`/ev/opportunities/${id}`);
 }
 
+// Refresh opportunity with live odds
+export interface RefreshResponse {
+  success: boolean;
+  message: string;
+  data: {
+    id: string;
+    fixtureId: string;
+    sport: string;
+    league: string;
+    homeTeam: string | null;
+    awayTeam: string | null;
+    startsAt: string;
+    market: string;
+    selection: string;
+    line: number | null;
+    playerName: string | null;
+    evPercent: number;
+    targetBook: string;
+    targetBookId: string;
+    offeredOdds: number;
+    fairOdds: number;
+    method: string;
+    bookCount: number;
+    bookOdds: Array<{
+      sportsbookId: string;
+      sportsbookName: string;
+      decimalOdds: number;
+      impliedProbability: number;
+      isTarget: boolean;
+      isSharp: boolean;
+      isOutlier: boolean;
+    }>;
+    refreshedAt: string;
+  } | null;
+}
+
+export async function refreshOpportunity(id: string): Promise<RefreshResponse> {
+  return fetchJSON(`/ev/opportunities/${id}/refresh`, {
+    method: 'POST',
+  });
+}
+
 // Meta
 export async function fetchSportsbooks(): Promise<SportsbooksMetaResponse> {
   return fetchJSON('/meta/sportsbooks');

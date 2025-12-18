@@ -1495,7 +1495,7 @@ export async function validatePlayerBet(
   market: string,
   line: number,
   direction: 'over' | 'under',
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<SoccerValidationResult | null> {
   // Find the player
   const player = await searchPlayer(playerName);
@@ -1579,7 +1579,7 @@ export async function batchValidateSoccerBets(
     direction: 'over' | 'under';
     opportunityId: string;
   }>,
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<Map<string, SoccerValidationResult | null>> {
   const results = new Map<string, SoccerValidationResult | null>();
 
@@ -1879,7 +1879,7 @@ export async function validateTeamBet(
   market: string,
   line: number,
   direction: 'over' | 'under',
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<TeamValidationResult | null> {
   // Find the team
   const team = await searchTeam(teamName);
@@ -1992,7 +1992,7 @@ export async function validateBTTS(
   homeTeam: string,
   awayTeam: string,
   selection: 'yes' | 'no',
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<{
   homeTeamBTTSRate: number;
   awayTeamBTTSRate: number;
@@ -2055,7 +2055,7 @@ export async function validateMatchResult(
   homeTeam: string,
   awayTeam: string,
   selection: '1' | 'X' | '2', // 1=Home, X=Draw, 2=Away
-  matchCount: number = 10
+  matchCount: number = 20
 ): Promise<{
   homeWinRate: number;
   drawRate: number;

@@ -10,7 +10,7 @@ import {
   groupOddsBySelection,
 } from '../engine/oddsNormalizer.js';
 import { calculateOpportunities } from '../engine/evCalculator.js';
-import { validateNBAPlayerBet } from '../services/ballDontLieClient.js';
+import { validateNBAPlayerBet, validateSpreadBet, validateMoneylineBet } from '../services/ballDontLieClient.js';
 import { db, schema } from '../db/index.js';
 import { eq, inArray, isNull, sql, and } from 'drizzle-orm';
 import { config } from '../config.js';
@@ -172,11 +172,17 @@ export async function runPipeline(): Promise<{
 
     console.info(`[Pipeline] Found ${opportunitiesFound} opportunities above ${config.minEvPercent}% EV`);
 
-    // Validate NBA player props in background (don't block pipeline)
+    // Validate NBA opportunities in background (don't block pipeline)
     // Only pass IDs to reduce memory - validation will query DB
     if (allOpportunityIds.length > 0) {
+      // Player props validation
       validateNBAOpportunitiesById(allOpportunityIds).catch(err => {
-        console.error('[Pipeline] Error validating NBA opportunities:', err);
+        console.error('[Pipeline] Error validating NBA player props:', err);
+      });
+
+      // Spread/moneyline validation
+      validateNBASpreadBetsById(allOpportunityIds).catch(err => {
+        console.error('[Pipeline] Error validating NBA spread bets:', err);
       });
     }
 
@@ -408,7 +414,7 @@ async function validateNBAOpportunitiesById(opportunityIds: string[]): Promise<v
             opp.market,
             opp.line!,
             direction as 'over' | 'under',
-            10 // Last 10 games
+            20 // Last 20 games
           );
 
           if (result) {
@@ -440,4 +446,172 @@ async function validateNBAOpportunitiesById(opportunityIds: string[]): Promise<v
   }
 
   console.info(`[Pipeline] Validated ${validated}/${toValidate.length} NBA player props`);
+}
+
+/**
+ * Check if a market is a spread or moneyline bet
+ */
+function isSpreadOrMoneyline(market: string): 'spread' | 'moneyline' | null {
+  const m = market.toLowerCase();
+  if (m.includes('spread') || m.includes('handicap')) {
+    return 'spread';
+  }
+  if (m.includes('moneyline') || m.includes('money_line') || m === 'h2h' || m.includes('winner')) {
+    return 'moneyline';
+  }
+  return null;
+}
+
+/**
+ * Extract team name from selection for spread/moneyline
+ * Examples:
+ * - "Atlanta Hawks -8.5" -> "Atlanta Hawks"
+ * - "Atlanta Hawks" -> "Atlanta Hawks"
+ * - "Under -8.5" with homeTeam "Atlanta Hawks" -> "Atlanta Hawks" (for under spread)
+ */
+function extractTeamFromSelection(selection: string, homeTeam?: string, awayTeam?: string): string | null {
+  const sel = selection.trim();
+
+  // Try to match team name with optional spread line
+  // Pattern: "Team Name +/-X.X" or just "Team Name"
+  const spreadMatch = sel.match(/^(.+?)\s*[+-]?\d+\.?\d*$/);
+  if (spreadMatch) {
+    return spreadMatch[1].trim();
+  }
+
+  // Check if selection matches home or away team
+  if (homeTeam && sel.toLowerCase().includes(homeTeam.toLowerCase())) {
+    return homeTeam;
+  }
+  if (awayTeam && sel.toLowerCase().includes(awayTeam.toLowerCase())) {
+    return awayTeam;
+  }
+
+  // Return the selection as is if it looks like a team name
+  if (sel.length > 3 && !sel.match(/^(over|under)\s/i)) {
+    return sel;
+  }
+
+  return null;
+}
+
+/**
+ * Validate NBA spread/moneyline bets by ID (memory-optimized)
+ */
+async function validateNBASpreadBetsById(opportunityIds: string[]): Promise<void> {
+  if (opportunityIds.length === 0) return;
+
+  // Query NBA spread/moneyline bets that need validation
+  const toValidate: Array<{
+    id: string;
+    selection: string;
+    market: string;
+    line: number | null;
+    homeTeam: string | null;
+    awayTeam: string | null;
+    bestEvPercent: number;
+  }> = [];
+
+  // Query in batches of 100
+  for (let i = 0; i < opportunityIds.length; i += 100) {
+    const batchIds = opportunityIds.slice(i, i + 100);
+    try {
+      const batch = await db.query.opportunities.findMany({
+        where: and(
+          inArray(schema.opportunities.id, batchIds),
+          eq(schema.opportunities.sport, 'basketball'),
+          isNull(schema.opportunities.nbaValidationJson)
+        ),
+        columns: {
+          id: true,
+          selection: true,
+          market: true,
+          line: true,
+          homeTeam: true,
+          awayTeam: true,
+          bestEvPercent: true,
+        },
+      });
+
+      // Filter to spread/moneyline bets
+      for (const opp of batch) {
+        const marketType = isSpreadOrMoneyline(opp.market);
+        if (marketType) {
+          toValidate.push(opp);
+        }
+      }
+    } catch (error) {
+      console.error('[Pipeline] Error querying opportunities for spread validation:', error);
+    }
+  }
+
+  if (toValidate.length === 0) {
+    console.info('[Pipeline] No NBA spread/moneyline bets need validation');
+    return;
+  }
+
+  // Sort by EV (highest first)
+  toValidate.sort((a, b) => b.bestEvPercent - a.bestEvPercent);
+
+  console.info(`[Pipeline] Validating ${toValidate.length} NBA spread/moneyline bets...`);
+
+  // Process in batches
+  const batchSize = 10;
+  let validated = 0;
+
+  for (let i = 0; i < toValidate.length; i += batchSize) {
+    const batch = toValidate.slice(i, i + batchSize);
+
+    await Promise.all(
+      batch.map(async (opp) => {
+        try {
+          const marketType = isSpreadOrMoneyline(opp.market);
+          if (!marketType) return;
+
+          // Extract team name
+          const teamName = extractTeamFromSelection(
+            opp.selection,
+            opp.homeTeam ?? undefined,
+            opp.awayTeam ?? undefined
+          );
+
+          if (!teamName) {
+            console.info('[Pipeline] Could not extract team name:', { selection: opp.selection });
+            return;
+          }
+
+          let result = null;
+
+          if (marketType === 'moneyline') {
+            result = await validateMoneylineBet(teamName, 20);
+          } else if (marketType === 'spread' && opp.line !== null) {
+            // Determine direction from selection
+            const direction = opp.selection.toLowerCase().includes('under') ? 'under' : 'over';
+            result = await validateSpreadBet(teamName, opp.line, direction, 20);
+          }
+
+          if (result) {
+            // Store validation result in database
+            await db
+              .update(schema.opportunities)
+              .set({
+                nbaValidationJson: JSON.stringify(result),
+                updatedAt: new Date().toISOString(),
+              })
+              .where(eq(schema.opportunities.id, opp.id));
+            validated++;
+          }
+        } catch (error) {
+          console.error(`[Pipeline] Error validating spread bet ${opp.id}:`, error);
+        }
+      })
+    );
+
+    // Delay between batches to respect rate limits
+    if (i + batchSize < toValidate.length) {
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+
+  console.info(`[Pipeline] Validated ${validated}/${toValidate.length} NBA spread/moneyline bets`);
 }

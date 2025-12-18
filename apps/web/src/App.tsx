@@ -1,5 +1,6 @@
 import { Routes, Route, NavLink } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import { useState, useEffect } from 'react';
 import Dashboard from './pages/Dashboard';
 import Opportunities from './pages/Opportunities';
 import OpportunityDetail from './pages/OpportunityDetail';
@@ -9,14 +10,50 @@ import Settings from './pages/Settings';
 import { fetchHealth } from './api/client';
 import clsx from 'clsx';
 
+// Stale threshold in milliseconds (5 minutes)
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Format relative time (e.g., "30s ago", "2m ago")
+function formatTimeAgo(date: Date): string {
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
+}
+
+type SyncStatus = 'syncing' | 'live' | 'stale' | 'offline';
+
 function App() {
-  const { data: health } = useQuery({
+  const { data: health, isError } = useQuery({
     queryKey: ['health'],
     queryFn: fetchHealth,
-    refetchInterval: 30000, // 30 seconds
+    refetchInterval: 15000, // 15 seconds for more responsive status
   });
 
+  const [now, setNow] = useState(Date.now());
+
+  // Update "time ago" every 10 seconds
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   const isSchedulerRunning = health?.scheduler?.isRunning ?? false;
+  const lastRun = health?.scheduler?.lastRun ? new Date(health.scheduler.lastRun) : null;
+
+  // Determine sync status
+  const getSyncStatus = (): SyncStatus => {
+    if (isError || !health) return 'offline';
+    if (isSchedulerRunning) return 'syncing';
+    if (!lastRun) return 'offline';
+    const timeSinceLastRun = now - lastRun.getTime();
+    if (timeSinceLastRun > STALE_THRESHOLD_MS) return 'stale';
+    return 'live';
+  };
+
+  const syncStatus = getSyncStatus();
 
   return (
     <div className="min-h-screen bg-dark-950 text-dark-100">
@@ -157,33 +194,63 @@ function App() {
               </NavLink>
             </nav>
 
-            {/* Status indicator with pulse */}
+            {/* Sync Status Indicator */}
             <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-dark-800/80 border border-dark-700/50">
+              <div className={clsx(
+                'flex items-center gap-2 px-3 py-1.5 rounded-full border',
+                syncStatus === 'live' && 'bg-emerald-500/10 border-emerald-500/30',
+                syncStatus === 'syncing' && 'bg-yellow-500/10 border-yellow-500/30',
+                syncStatus === 'stale' && 'bg-red-500/10 border-red-500/30',
+                syncStatus === 'offline' && 'bg-gray-500/10 border-gray-500/30'
+              )}>
                 <div className="relative">
                   <div
                     className={clsx(
                       'w-2 h-2 rounded-full',
-                      health?.status === 'ok' ? 'bg-emerald-500' : 'bg-yellow-500'
+                      syncStatus === 'live' && 'bg-emerald-500',
+                      syncStatus === 'syncing' && 'bg-yellow-500',
+                      syncStatus === 'stale' && 'bg-red-500',
+                      syncStatus === 'offline' && 'bg-gray-500'
                     )}
                   />
-                  {health?.status === 'ok' && (
-                    <div className="absolute inset-0 w-2 h-2 rounded-full bg-emerald-500 animate-ping opacity-75"></div>
+                  {(syncStatus === 'live' || syncStatus === 'syncing') && (
+                    <div className={clsx(
+                      'absolute inset-0 w-2 h-2 rounded-full animate-ping opacity-75',
+                      syncStatus === 'live' && 'bg-emerald-500',
+                      syncStatus === 'syncing' && 'bg-yellow-500'
+                    )}></div>
                   )}
                 </div>
-                <span className="text-xs font-medium text-dark-300">
-                  {isSchedulerRunning ? (
-                    <span className="flex items-center gap-1">
-                      <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                      </svg>
-                      Scanning
+                <div className="flex flex-col">
+                  <span className={clsx(
+                    'text-xs font-semibold uppercase tracking-wide',
+                    syncStatus === 'live' && 'text-emerald-400',
+                    syncStatus === 'syncing' && 'text-yellow-400',
+                    syncStatus === 'stale' && 'text-red-400',
+                    syncStatus === 'offline' && 'text-gray-400'
+                  )}>
+                    {syncStatus === 'syncing' ? (
+                      <span className="flex items-center gap-1">
+                        <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                        Syncing
+                      </span>
+                    ) : syncStatus === 'live' ? (
+                      'Live'
+                    ) : syncStatus === 'stale' ? (
+                      'Stale'
+                    ) : (
+                      'Offline'
+                    )}
+                  </span>
+                  {lastRun && syncStatus !== 'offline' && (
+                    <span className="text-[10px] text-dark-500">
+                      {formatTimeAgo(lastRun)}
                     </span>
-                  ) : (
-                    'Live'
                   )}
-                </span>
+                </div>
               </div>
             </div>
           </div>

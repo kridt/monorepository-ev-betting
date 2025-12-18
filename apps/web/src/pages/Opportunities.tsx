@@ -1,10 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, validateTeamBet, validateBTTS, validateMatchResult, type NBAValidationResult, type OpportunityResponse, type TeamValidationResult, type BTTSValidationResult, type MatchResultValidationResult } from '../api/client';
+import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, validateTeamBet, validateBTTS, validateMatchResult, refreshOpportunity, type NBAValidationResult, type OpportunityResponse, type TeamValidationResult, type BTTSValidationResult, type MatchResultValidationResult } from '../api/client';
 // NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
 import { useRemoved } from '../hooks/useRemoved';
+import { calculateGrade, getGradeBgColor, getGradeReasons, getGradeDescription, ALL_GRADES, type Grade, type GradeResult } from '../lib/grading';
 import type { FixtureStats, ValidationResult, BookOdds } from '@ev-bets/shared';
 import clsx from 'clsx';
 
@@ -144,6 +145,17 @@ function isPlayerProp(market: string): boolean {
 // Check if selection looks like a player prop (Name Over/Under X.X)
 function isPlayerPropSelection(selection: string): boolean {
   return /^.+\s+(over|under)\s+[\d.]+$/i.test(selection);
+}
+
+// Check if a market is spread or moneyline
+function isSpreadOrMoneyline(market: string): boolean {
+  const m = market.toLowerCase();
+  return m.includes('spread') ||
+    m.includes('handicap') ||
+    m.includes('moneyline') ||
+    m.includes('money_line') ||
+    m === 'h2h' ||
+    m.includes('winner');
 }
 
 // Extract player name from selection (e.g., "Jaylen Brown Over 42.5" -> "Jaylen Brown")
@@ -291,12 +303,18 @@ export default function Opportunities() {
   const [page, setPage] = useState(1);
   const [visibleCounts, setVisibleCounts] = useState<Record<string, number>>({});
   const [showFilters, setShowFilters] = useState(false);
+  // Grade filter - all grades enabled by default
+  const [selectedGrades, setSelectedGrades] = useState<Set<Grade>>(new Set(ALL_GRADES));
   const [validationResults, setValidationResults] = useState<Record<string, ValidationResult | null>>({});
   const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
   // Team validation state (for soccer team markets like corners, BTTS, 1X2)
   const [teamValidationResults, setTeamValidationResults] = useState<Record<string, TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null>>({});
   const [teamValidatingIds, setTeamValidatingIds] = useState<Set<string>>(new Set());
   // NBA validation is pre-computed on the server - no client-side state needed
+
+  // Live odds refresh state
+  const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
+  const [lastRefreshed, setLastRefreshed] = useState<Record<string, string>>({});
 
   // Mutation for validating bets
   const validateMutation = useMutation({
@@ -377,6 +395,36 @@ export default function Opportunities() {
     return validationResults[key];
   };
   // NBA validation is pre-computed - use opp.nbaValidation directly from API response
+
+  // Handler for refreshing live odds
+  const handleRefresh = async (e: React.MouseEvent, opp: Opportunity) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (refreshingIds.has(opp.id)) return;
+
+    setRefreshingIds(prev => new Set(prev).add(opp.id));
+
+    try {
+      const response = await refreshOpportunity(opp.id);
+      if (response.success && response.data) {
+        setLastRefreshed(prev => ({
+          ...prev,
+          [opp.id]: response.data!.refreshedAt,
+        }));
+        // Trigger refetch to update the list
+        refetch();
+      }
+    } catch (error) {
+      console.error('[Refresh] Error refreshing odds:', error);
+    } finally {
+      setRefreshingIds(prev => {
+        const next = new Set(prev);
+        next.delete(opp.id);
+        return next;
+      });
+    }
+  };
 
   // Handler for team/match validation (corners, BTTS, 1X2)
   const handleTeamValidate = async (e: React.MouseEvent, opp: Opportunity, homeTeam: string, awayTeam: string) => {
@@ -478,7 +526,7 @@ export default function Opportunities() {
     queryFn: fetchMethods,
   });
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['opportunities', filters, page],
     queryFn: () => {
       const params: Parameters<typeof fetchOpportunities>[0] = {
@@ -503,15 +551,59 @@ export default function Opportunities() {
   });
   // NBA validation is pre-computed on the server - no auto-validation needed
 
+  // Calculate grade for an opportunity (inline for useMemo)
+  const calculateOpportunityGradeResult = (opp: Opportunity): GradeResult => {
+    let hitRate: number | null = null;
+    let sampleSize: number | null = null;
+
+    if (opp.nbaValidation) {
+      hitRate = opp.nbaValidation.hitRate;
+      sampleSize = opp.nbaValidation.matchesChecked;
+    } else {
+      const playerName = extractPlayerName(opp.selection, opp.playerName);
+      if (playerName && opp.line !== undefined) {
+        const key = `${playerName}-${opp.market}-${opp.line}`;
+        const validation = validationResults[key];
+        if (validation) {
+          hitRate = validation.hitRate;
+          sampleSize = validation.matchesChecked;
+        }
+      }
+    }
+    if (hitRate === null) {
+      const key = `${opp.id}-${opp.market}`;
+      const teamVal = teamValidationResults[key];
+      if (teamVal && 'hitRate' in teamVal) {
+        hitRate = (teamVal as TeamValidationResult).hitRate;
+        sampleSize = (teamVal as TeamValidationResult).matchesChecked;
+      }
+    }
+
+    return calculateGrade({
+      evPercent: opp.evPercent,
+      odds: opp.offeredOdds,
+      hitRate,
+      sampleSize,
+      bookCount: opp.bookCount,
+    });
+  };
+
+  // Shortcut to just get the grade letter
+  const getOpportunityGrade = (opp: Opportunity): Grade => {
+    return calculateOpportunityGradeResult(opp).grade;
+  };
+
   const groupedMatches = useMemo(() => {
     if (!data?.data) return [];
-    // Filter out tracked and removed bets
-    const filteredData = data.data.filter(
-      opp => !trackedIds.has(opp.id) && !removedIds.has(opp.id)
-    );
+    // Filter out tracked, removed bets, and filter by selected grades
+    const filteredData = data.data.filter(opp => {
+      if (trackedIds.has(opp.id) || removedIds.has(opp.id)) return false;
+      const grade = getOpportunityGrade(opp);
+      return selectedGrades.has(grade);
+    });
     // Group by match, sort by selected option, and limit to 10 matches
     return groupByMatch(filteredData, filters.sortBy).slice(0, 10);
-  }, [data?.data, filters.sortBy, trackedIds, removedIds]);
+  }, [data?.data, filters.sortBy, trackedIds, removedIds, selectedGrades, validationResults, teamValidationResults]);
 
   // Get soccer fixture IDs for stats fetching
   const soccerFixtureIds = useMemo(() => {
@@ -579,11 +671,29 @@ export default function Opportunities() {
       method: '',
       sortBy: 'startsAt', // Reset to default sort
     });
+    setSelectedGrades(new Set(ALL_GRADES));
     setPage(1);
   };
 
+  // Toggle a grade in the filter
+  const toggleGrade = (grade: Grade) => {
+    setSelectedGrades(prev => {
+      const next = new Set(prev);
+      if (next.has(grade)) {
+        // Don't allow deselecting all grades
+        if (next.size > 1) {
+          next.delete(grade);
+        }
+      } else {
+        next.add(grade);
+      }
+      return next;
+    });
+  };
+
   // Check for active filters (exclude sortBy since it always has a value)
-  const hasActiveFilters = Object.entries(filters).some(([key, v]) => key !== 'sortBy' && v !== '');
+  const hasActiveFilters = Object.entries(filters).some(([key, v]) => key !== 'sortBy' && v !== '') ||
+    selectedGrades.size < ALL_GRADES.length;
   const totalOpportunities = data?.data?.length || 0;
 
   return (
@@ -832,6 +942,32 @@ export default function Opportunities() {
                 value={filters.maxOdds}
                 onChange={e => handleFilterChange('maxOdds', e.target.value)}
               />
+            </div>
+          </div>
+
+          {/* Grade Filter Row */}
+          <div className="mt-4 pt-4 border-t border-slate-800/50">
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-medium text-amber-400 uppercase tracking-wider">Bet Grade</span>
+              <div className="flex items-center gap-2 flex-wrap">
+                {ALL_GRADES.map(grade => (
+                  <button
+                    key={grade}
+                    onClick={() => toggleGrade(grade)}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-lg text-sm font-bold transition-all duration-200',
+                      selectedGrades.has(grade)
+                        ? getGradeBgColor(grade)
+                        : 'bg-slate-800/50 text-slate-500 border border-slate-700/50 opacity-50 hover:opacity-75'
+                    )}
+                  >
+                    {grade}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-slate-500 ml-auto">
+                {selectedGrades.size === ALL_GRADES.length ? 'All grades' : `${selectedGrades.size} selected`}
+              </span>
             </div>
           </div>
         </div>
@@ -1147,6 +1283,56 @@ export default function Opportunities() {
                               )}
                             </div>
 
+                            {/* Grade Badge with Tooltip */}
+                            {(() => {
+                              const gradeResult = calculateOpportunityGradeResult(opp);
+                              const reasons = getGradeReasons(gradeResult);
+                              return (
+                                <div className="relative group/grade shrink-0">
+                                  <div
+                                    className={clsx(
+                                      'w-10 h-10 flex items-center justify-center rounded-lg font-black text-lg cursor-help transition-transform group-hover/grade:scale-110',
+                                      getGradeBgColor(gradeResult.grade)
+                                    )}
+                                  >
+                                    {gradeResult.grade}
+                                  </div>
+                                  {/* Hover Tooltip */}
+                                  <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-72 p-3 rounded-xl bg-slate-800 border border-slate-600 shadow-xl opacity-0 invisible group-hover/grade:opacity-100 group-hover/grade:visible transition-all duration-200 z-50 pointer-events-none">
+                                    <div className="flex items-center gap-2 mb-2 pb-2 border-b border-slate-700">
+                                      <span className={clsx(
+                                        'w-8 h-8 flex items-center justify-center rounded-lg font-bold text-sm',
+                                        getGradeBgColor(gradeResult.grade)
+                                      )}>
+                                        {gradeResult.grade}
+                                      </span>
+                                      <div>
+                                        <div className="text-white font-semibold text-sm">{getGradeDescription(gradeResult.grade)}</div>
+                                        <div className="text-slate-400 text-xs">Score: {gradeResult.score}/100</div>
+                                      </div>
+                                    </div>
+                                    <ul className="space-y-1">
+                                      {reasons.map((reason, i) => (
+                                        <li key={i} className="flex items-start gap-2 text-xs">
+                                          <span className={clsx(
+                                            'mt-0.5 w-1.5 h-1.5 rounded-full shrink-0',
+                                            reason.includes('Strong') || reason.includes('Good') || reason.includes('Positive') ? 'bg-emerald-400' :
+                                            reason.includes('Negative') || reason.includes('Limited') || reason.includes('Small') || reason.includes('Low') ? 'bg-red-400' :
+                                            'bg-amber-400'
+                                          )}></span>
+                                          <span className="text-slate-300">{reason}</span>
+                                        </li>
+                                      ))}
+                                    </ul>
+                                    {/* Arrow */}
+                                    <div className="absolute top-full left-1/2 -translate-x-1/2 -mt-px">
+                                      <div className="w-3 h-3 rotate-45 bg-slate-800 border-r border-b border-slate-600"></div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
                             {/* EV Badge */}
                             <div className={clsx(
                               'shrink-0 px-4 py-2 rounded-xl font-black text-lg',
@@ -1275,6 +1461,32 @@ export default function Opportunities() {
                               <span>Hide</span>
                             </button>
 
+                            {/* Refresh Live Odds Button */}
+                            <button
+                              onClick={(e) => handleRefresh(e, opp)}
+                              disabled={refreshingIds.has(opp.id)}
+                              className={clsx(
+                                'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-300',
+                                refreshingIds.has(opp.id)
+                                  ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40'
+                                  : 'bg-slate-700/50 text-slate-400 hover:bg-cyan-500/20 hover:text-cyan-300 border border-slate-600/50 hover:border-cyan-500/40',
+                                'disabled:opacity-50 disabled:cursor-not-allowed'
+                              )}
+                              title="Refresh with live odds from sportsbooks"
+                            >
+                              {refreshingIds.has(opp.id) ? (
+                                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                              ) : (
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                </svg>
+                              )}
+                              <span>{refreshingIds.has(opp.id) ? 'Refreshing...' : 'Live Odds'}</span>
+                            </button>
+
                             {/* NBA Validation (for basketball player props) - Pre-computed from server */}
                             {match.sport === 'basketball' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && (() => {
                               const nbaValidation = opp.nbaValidation;
@@ -1304,6 +1516,40 @@ export default function Opportunities() {
                                 <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/30 text-slate-500 text-xs">
                                   <span className="text-orange-400">🏀</span>
                                   <span>No NBA stats</span>
+                                </div>
+                              );
+                            })()}
+
+                            {/* NBA Spread/Moneyline Validation - Pre-computed from server */}
+                            {match.sport === 'basketball' && isSpreadOrMoneyline(opp.market) && (() => {
+                              const nbaValidation = opp.nbaValidation;
+
+                              // Show validation result if available
+                              if (nbaValidation) {
+                                // For spread bets, show avgMargin instead of seasonAvg
+                                const avgMargin = (nbaValidation as { avgMargin?: number }).avgMargin;
+                                return (
+                                  <div className={clsx(
+                                    'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
+                                    nbaValidation.hitRate >= 60 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+                                    nbaValidation.hitRate >= 45 && nbaValidation.hitRate < 60 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+                                    nbaValidation.hitRate < 45 && 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                  )}>
+                                    <span className="text-orange-400">🏀</span>
+                                    <span className="font-bold">{nbaValidation.hits}/{nbaValidation.matchesChecked}</span>
+                                    <span className="text-slate-400">({nbaValidation.hitRate}%)</span>
+                                    {avgMargin !== undefined && (
+                                      <span className="text-cyan-400">avg margin: {avgMargin > 0 ? '+' : ''}{avgMargin}</span>
+                                    )}
+                                  </div>
+                                );
+                              }
+
+                              // No validation data available
+                              return (
+                                <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/30 text-slate-500 text-xs">
+                                  <span className="text-orange-400">🏀</span>
+                                  <span>Loading spread data...</span>
                                 </div>
                               );
                             })()}

@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import { db, schema } from '../db/index.js';
 import { eq, desc, asc, sql, and, gte, lte, like, or } from 'drizzle-orm';
-import type { FairOddsMethod, EVOpportunitySummary } from '@ev-bets/shared';
+import type { FairOddsMethod, EVOpportunitySummary, NormalizedOdds } from '@ev-bets/shared';
 import { FAIR_ODDS_METHODS } from '@ev-bets/shared';
-import { generateExplanation } from '../engine/evCalculator.js';
+import { generateExplanation, calculateOpportunities } from '../engine/evCalculator.js';
+import { fetchOdds, getAllRequiredSportsbooks } from '../services/opticOddsClient.js';
+import { normalizeOddsEntry, groupOddsBySelection } from '../engine/oddsNormalizer.js';
+import { config } from '../config.js';
 
 interface OpportunitiesQuery {
   method?: string;
@@ -367,5 +370,160 @@ export async function opportunitiesRoutes(app: FastifyInstance): Promise<void> {
       bookBreakdown,
       explanation,
     };
+  });
+
+  /**
+   * POST /ev/opportunities/:id/refresh
+   * Fetch fresh odds from OpticOdds and recalculate EV in real-time
+   */
+  app.post<{
+    Params: { id: string };
+  }>('/opportunities/:id/refresh', async (request, reply) => {
+    const { id } = request.params;
+
+    // Get existing opportunity
+    const opportunity = await db.query.opportunities.findFirst({
+      where: eq(schema.opportunities.id, id),
+    });
+
+    if (!opportunity) {
+      reply.status(404);
+      return {
+        error: 'Not found',
+        message: `Opportunity with id ${id} not found`,
+        statusCode: 404,
+      };
+    }
+
+    try {
+      // Fetch fresh odds from OpticOdds
+      const allSportsbooks = getAllRequiredSportsbooks();
+      const targetBookIds = config.targetSportsbooks;
+      const sharpBookId = config.sharpBook;
+
+      console.info(`[Refresh] Fetching fresh odds for fixture ${opportunity.fixtureId}`);
+
+      const oddsResponse = await fetchOdds(opportunity.fixtureId, allSportsbooks);
+
+      if (oddsResponse.data.length === 0) {
+        return {
+          success: false,
+          message: 'No odds available for this fixture',
+          data: null,
+        };
+      }
+
+      // Normalize all odds
+      const normalizedOdds: NormalizedOdds[] = [];
+
+      for (const fixtureWithOdds of oddsResponse.data) {
+        for (const entry of fixtureWithOdds.odds) {
+          const sportsbookId = entry.sportsbook.toLowerCase().replace(/\s+/g, '_');
+          const normalized = normalizeOddsEntry(
+            entry,
+            opportunity.fixtureId,
+            sportsbookId,
+            entry.sportsbook
+          );
+          if (normalized) {
+            normalizedOdds.push(normalized);
+          }
+        }
+      }
+
+      // Group by selection and find the matching selection
+      const groupedOdds = groupOddsBySelection(normalizedOdds, targetBookIds, sharpBookId);
+
+      // Find the group that matches this opportunity's selection
+      const matchingGroup = groupedOdds.find(
+        g => g.selectionKey === opportunity.selectionKey
+      );
+
+      if (!matchingGroup) {
+        return {
+          success: false,
+          message: 'Selection no longer available in current odds',
+          data: null,
+        };
+      }
+
+      // Recalculate EV
+      const newOpportunity = calculateOpportunities(
+        matchingGroup,
+        {
+          sport: opportunity.sport,
+          league: opportunity.league,
+          homeTeam: opportunity.homeTeam ?? undefined,
+          awayTeam: opportunity.awayTeam ?? undefined,
+          startsAt: opportunity.startsAt,
+        },
+        targetBookIds
+      );
+
+      if (!newOpportunity) {
+        return {
+          success: false,
+          message: 'EV no longer meets threshold',
+          data: null,
+        };
+      }
+
+      // Update database with fresh data
+      await db
+        .update(schema.opportunities)
+        .set({
+          bestEvPercent: newOpportunity.bestEV.evPercent,
+          bestTargetBookId: newOpportunity.bestEV.targetBookId,
+          bestTargetBookName: newOpportunity.bestEV.targetBookName,
+          bestMethod: newOpportunity.bestEV.method,
+          bestOfferedOdds: newOpportunity.bestEV.offeredOdds,
+          bestFairOdds: newOpportunity.bestEV.fairOdds,
+          calculationsJson: JSON.stringify(newOpportunity.calculations),
+          fairOddsJson: JSON.stringify(newOpportunity.fairOdds),
+          bookOddsJson: JSON.stringify(newOpportunity.bookOdds || []),
+          bookCount: newOpportunity.bookCount,
+          timestamp: newOpportunity.timestamp,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(schema.opportunities.id, id));
+
+      console.info(`[Refresh] Updated opportunity ${id}: EV ${newOpportunity.bestEV.evPercent.toFixed(2)}%`);
+
+      // Return updated data
+      return {
+        success: true,
+        message: 'Odds refreshed successfully',
+        data: {
+          id: opportunity.id,
+          fixtureId: opportunity.fixtureId,
+          sport: opportunity.sport,
+          league: opportunity.league,
+          homeTeam: opportunity.homeTeam,
+          awayTeam: opportunity.awayTeam,
+          startsAt: opportunity.startsAt,
+          market: opportunity.market,
+          selection: opportunity.selection,
+          line: opportunity.line,
+          playerName: opportunity.playerName,
+          evPercent: newOpportunity.bestEV.evPercent,
+          targetBook: newOpportunity.bestEV.targetBookName,
+          targetBookId: newOpportunity.bestEV.targetBookId,
+          offeredOdds: newOpportunity.bestEV.offeredOdds,
+          fairOdds: newOpportunity.bestEV.fairOdds,
+          method: newOpportunity.bestEV.method,
+          bookCount: newOpportunity.bookCount,
+          bookOdds: newOpportunity.bookOdds,
+          refreshedAt: new Date().toISOString(),
+        },
+      };
+    } catch (error) {
+      console.error(`[Refresh] Error refreshing opportunity ${id}:`, error);
+      reply.status(500);
+      return {
+        success: false,
+        message: error instanceof Error ? error.message : 'Failed to refresh odds',
+        data: null,
+      };
+    }
   });
 }
