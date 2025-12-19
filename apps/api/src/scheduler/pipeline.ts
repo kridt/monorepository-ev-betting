@@ -539,7 +539,11 @@ async function validateOpportunity(opp: {
             hits: result.hits,
             hitRate: result.hitRate,
             avgValue: result.avgValue,
-            recentGames: result.recentGames,
+            recentGames: result.recentGames.map(g => ({
+              ...g,
+              opponent: g.opponent || 'Unknown',
+              isHome: g.isHome ?? undefined,
+            })),
           };
         }
       }

@@ -14,11 +14,14 @@ async function testAPI() {
   console.log(`Base URL: ${BASE_URL}`);
 
   try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    type ApiResponse = { data?: any; message?: string; rate_limit?: { remaining: number; resets_in_seconds: number } };
+
     // Test 1: Fetch leagues
     console.log('\n1. Fetching leagues...');
     const leaguesUrl = `${BASE_URL}/leagues?api_token=${API_KEY}&per_page=10`;
     const leaguesRes = await fetch(leaguesUrl);
-    const leaguesData = await leaguesRes.json();
+    const leaguesData = await leaguesRes.json() as ApiResponse;
 
     console.log(`   Status: ${leaguesRes.status}`);
     console.log(`   Data type: ${typeof leaguesData.data}`);
@@ -36,7 +39,7 @@ async function testAPI() {
     console.log('\n2. Fetching Premier League (ID: 8)...');
     const plUrl = `${BASE_URL}/leagues/8?api_token=${API_KEY}&include=currentSeason`;
     const plRes = await fetch(plUrl);
-    const plData = await plRes.json();
+    const plData = await plRes.json() as ApiResponse;
 
     console.log(`   Status: ${plRes.status}`);
     if (plData.data) {
@@ -50,7 +53,7 @@ async function testAPI() {
     console.log('\n3. Checking my subscription...');
     const subUrl = `https://api.sportmonks.com/v3/my/enrichments?api_token=${API_KEY}`;
     const subRes = await fetch(subUrl);
-    const subData = await subRes.json();
+    const subData = await subRes.json() as ApiResponse;
 
     console.log(`   Status: ${subRes.status}`);
     if (Array.isArray(subData.data)) {

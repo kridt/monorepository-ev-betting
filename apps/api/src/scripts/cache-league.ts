@@ -33,7 +33,7 @@ async function fetchAPI<T>(endpoint: string, params: Record<string, string> = {}
   try {
     const res = await fetch(url.toString());
     if (!res.ok) return null;
-    const data = await res.json();
+    const data = await res.json() as { data: T };
     return data.data;
   } catch {
     return null;

@@ -992,6 +992,7 @@ export async function updateSoccerCache(): Promise<CacheUpdateResult> {
     gamesAdded: 0,
     mappingsCreated: 0,
     errors: [],
+    duration: 0,
   };
 
   log('Starting full soccer cache update...');

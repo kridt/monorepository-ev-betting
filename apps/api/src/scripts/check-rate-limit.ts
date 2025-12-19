@@ -5,7 +5,7 @@ const API_KEY = process.env.SPORTMONKS_API_KEY;
 
 async function check() {
   const res = await fetch(`https://api.sportmonks.com/v3/football/leagues/8?api_token=${API_KEY}`);
-  const data = await res.json();
+  const data = await res.json() as { rate_limit?: { remaining: number; resets_in_seconds: number } };
 
   console.log('SportMonks API Rate Limit Status');
   console.log('═'.repeat(40));

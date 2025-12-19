@@ -7,9 +7,9 @@ const result = await db.all(sql`SELECT DISTINCT market, sport, COUNT(*) as cnt F
 console.log('Market types in database:');
 
 let currentSport = '';
-for (const row of result) {
+for (const row of result as Array<{ sport: string; market: string; cnt: number }>) {
   if (row.sport !== currentSport) {
-    currentSport = row.sport as string;
+    currentSport = row.sport;
     console.log(`\n${currentSport.toUpperCase()}:`);
   }
   console.log(`  ${row.market} (${row.cnt})`);

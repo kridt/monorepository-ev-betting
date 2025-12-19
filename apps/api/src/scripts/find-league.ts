@@ -7,22 +7,22 @@ async function find() {
   const search = process.argv[2]?.toLowerCase() || '';
 
   const res = await fetch(`https://api.sportmonks.com/v3/football/leagues?api_token=${API_KEY}&per_page=150&include=country`);
-  const data = await res.json();
+  const data = await res.json() as { data?: Array<{ id: number; name: string; country?: { name: string }; category?: number }> };
 
   if (search) {
     console.log(`Searching for "${search}"...\n`);
-    const matches = data.data?.filter((l: any) =>
+    const matches = data.data?.filter((l) =>
       l.name.toLowerCase().includes(search) ||
       l.country?.name?.toLowerCase().includes(search)
     ) || [];
 
-    matches.forEach((l: any) => {
+    matches.forEach((l) => {
       console.log(`  ID: ${l.id} - ${l.name} (${l.country?.name || '?'})`);
     });
   } else {
     console.log('Top leagues by category:\n');
-    const sorted = data.data?.sort((a: any, b: any) => (a.category || 99) - (b.category || 99)) || [];
-    sorted.slice(0, 20).forEach((l: any) => {
+    const sorted = [...(data.data || [])].sort((a, b) => (a.category || 99) - (b.category || 99));
+    sorted.slice(0, 20).forEach((l) => {
       console.log(`  ID: ${l.id} - ${l.name} (${l.country?.name || '?'})`);
     });
   }

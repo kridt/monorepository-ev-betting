@@ -109,6 +109,9 @@ export interface CachedGameStats {
   blocks: number | null;
   turnovers: number | null;
   pra: number | null;
+  pr: number | null;
+  pa: number | null;
+  ra: number | null;
 }
 
 // ============================================================================
