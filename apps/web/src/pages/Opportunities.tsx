@@ -406,6 +406,17 @@ export default function Opportunities() {
 
   const groupedMatches = useMemo(() => {
     if (!data?.data) return [];
+    // Debug: Log raw data from API
+    const firstBball = data.data.find(o => o.sport === 'basketball');
+    if (firstBball) {
+      console.log('[API Debug] First basketball from API:', {
+        id: firstBball.id,
+        market: firstBball.market,
+        hasNbaValidation: 'nbaValidation' in firstBball,
+        nbaValidation: (firstBball as any).nbaValidation,
+        keys: Object.keys(firstBball),
+      });
+    }
     // Filter out tracked, removed bets, bets from same player+match as tracked bet, and filter by selected grades
     const filteredData = data.data.filter(opp => {
       // Hide if this specific bet is tracked or removed
