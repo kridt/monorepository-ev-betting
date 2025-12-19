@@ -318,6 +318,16 @@ export async function opportunitiesRoutes(app: FastifyInstance): Promise<void> {
     const calculations = JSON.parse(opportunity.calculationsJson);
     const fairOdds = JSON.parse(opportunity.fairOddsJson);
 
+    // Parse validation JSON if present
+    let validation = undefined;
+    if (opportunity.nbaValidationJson) {
+      try {
+        validation = JSON.parse(opportunity.nbaValidationJson);
+      } catch {
+        // On parse error, keep undefined
+      }
+    }
+
     // Build full opportunity object
     const fullOpportunity = {
       id: opportunity.id,
@@ -347,6 +357,7 @@ export async function opportunitiesRoutes(app: FastifyInstance): Promise<void> {
       fairOdds,
       bookCount: opportunity.bookCount,
       timestamp: opportunity.timestamp,
+      validation, // Include pre-computed validation data
     };
 
     // Generate explanation

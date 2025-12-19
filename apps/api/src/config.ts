@@ -48,7 +48,10 @@ const rawConfig = {
   port: getEnvNumber('PORT', 4000),
   host: getEnvVar('HOST', '0.0.0.0'),
 
-  dbPath: getEnvVar('DB_PATH', './data/dev.db'),
+  // Database - Turso cloud or local SQLite
+  tursoDbUrl: getEnvVar('TURSO_DATABASE_URL', ''),
+  tursoAuthToken: getEnvVar('TURSO_AUTH_TOKEN', ''),
+  dbPath: getEnvVar('DB_PATH', './data/dev.db'), // Fallback for local dev
 
   refreshIntervalMs: getEnvNumber('REFRESH_INTERVAL_MS', 120000),
 

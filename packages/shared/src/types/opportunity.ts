@@ -82,6 +82,28 @@ export const EVOpportunitySchema = z.object({
   // Market data
   bookCount: z.number(),
   timestamp: z.string(),
+
+  // Pre-computed validation stats (from OpticOdds)
+  validation: z.object({
+    playerId: z.string().optional(),
+    teamId: z.string().optional(),
+    playerName: z.string().optional(),
+    teamName: z.string().optional(),
+    market: z.string(),
+    line: z.number(),
+    direction: z.enum(['over', 'under']),
+    matchesChecked: z.number(),
+    hits: z.number(),
+    hitRate: z.number(),
+    avgValue: z.number(),
+    recentGames: z.array(z.object({
+      date: z.string(),
+      opponent: z.string(),
+      value: z.number(),
+      hit: z.boolean(),
+      isHome: z.boolean().optional(),
+    })).optional(),
+  }).optional(),
 });
 
 export type EVOpportunity = z.infer<typeof EVOpportunitySchema>;

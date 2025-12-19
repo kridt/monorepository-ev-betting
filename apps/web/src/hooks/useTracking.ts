@@ -4,7 +4,10 @@ import {
   trackMultipleBets,
   untrackBet,
   subscribeToTrackedBetIds,
+  subscribeToTrackedPlayerMatches,
+  createPlayerMatchKey,
   type TrackedBet,
+  type PlayerMatchKey,
 } from '../services/trackingService';
 import type { OpportunityResponse } from '../api/client';
 
@@ -13,6 +16,7 @@ import type { OpportunityResponse } from '../api/client';
  */
 export function useTracking() {
   const [trackedIds, setTrackedIds] = useState<Set<string>>(new Set());
+  const [trackedPlayerMatches, setTrackedPlayerMatches] = useState<Set<PlayerMatchKey>>(new Set());
   const [loading, setLoading] = useState<string | null>(null);
 
   // Subscribe to tracked bet IDs for real-time updates
@@ -24,10 +28,29 @@ export function useTracking() {
     return () => unsubscribe();
   }, []);
 
+  // Subscribe to tracked player+match combinations
+  useEffect(() => {
+    const unsubscribe = subscribeToTrackedPlayerMatches((playerMatches) => {
+      setTrackedPlayerMatches(playerMatches);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   // Check if a bet is tracked
   const isTracked = useCallback(
     (betId: string) => trackedIds.has(betId),
     [trackedIds]
+  );
+
+  // Check if any bet for this player+match combo is already tracked
+  // This is used to hide other bets from the same player in the same match
+  const isPlayerMatchTracked = useCallback(
+    (fixtureId: string, playerName: string | undefined | null) => {
+      const key = createPlayerMatchKey(fixtureId, playerName);
+      return key ? trackedPlayerMatches.has(key) : false;
+    },
+    [trackedPlayerMatches]
   );
 
   // Track a single bet
@@ -80,7 +103,9 @@ export function useTracking() {
 
   return {
     trackedIds,
+    trackedPlayerMatches,
     isTracked,
+    isPlayerMatchTracked,
     track,
     untrack,
     toggleTrack,

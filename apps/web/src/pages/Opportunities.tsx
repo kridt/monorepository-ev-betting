@@ -1,12 +1,12 @@
 import { useState, useMemo, useEffect } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, validateBet, validateTeamBet, validateBTTS, validateMatchResult, refreshOpportunity, type NBAValidationResult, type OpportunityResponse, type TeamValidationResult, type BTTSValidationResult, type MatchResultValidationResult } from '../api/client';
+import { useQuery } from '@tanstack/react-query';
+import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, refreshOpportunity, type NBAValidationResult, type OpportunityResponse } from '../api/client';
 // NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
 import { useRemoved } from '../hooks/useRemoved';
 import { calculateGrade, getGradeBgColor, getGradeReasons, getGradeDescription, ALL_GRADES, type Grade, type GradeResult } from '../lib/grading';
-import type { FixtureStats, ValidationResult, BookOdds } from '@ev-bets/shared';
+import type { FixtureStats, BookOdds } from '@ev-bets/shared';
 import clsx from 'clsx';
 
 // Types
@@ -284,7 +284,7 @@ function groupByMatch(opportunities: Opportunity[], sortBy: MatchSortOption = 's
 
 export default function Opportunities() {
   const { settings, updateFilters } = useSettings();
-  const { trackedIds, isTracked, toggleTrack, trackAllForFixture, isLoading: isTrackingLoading } = useTracking();
+  const { trackedIds, isTracked, isPlayerMatchTracked, toggleTrack, trackAllForFixture, isLoading: isTrackingLoading } = useTracking();
   const { removedIds, isRemoved, remove, removeAllForFixture } = useRemoved();
 
   const [filters, setFilters] = useState({
@@ -305,96 +305,11 @@ export default function Opportunities() {
   const [showFilters, setShowFilters] = useState(false);
   // Grade filter - all grades enabled by default
   const [selectedGrades, setSelectedGrades] = useState<Set<Grade>>(new Set(ALL_GRADES));
-  const [validationResults, setValidationResults] = useState<Record<string, ValidationResult | null>>({});
-  const [validatingIds, setValidatingIds] = useState<Set<string>>(new Set());
-  // Team validation state (for soccer team markets like corners, BTTS, 1X2)
-  const [teamValidationResults, setTeamValidationResults] = useState<Record<string, TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null>>({});
-  const [teamValidatingIds, setTeamValidatingIds] = useState<Set<string>>(new Set());
-  // NBA validation is pre-computed on the server - no client-side state needed
+  // All validation is pre-computed on the server - no client-side state needed
 
   // Live odds refresh state
   const [refreshingIds, setRefreshingIds] = useState<Set<string>>(new Set());
   const [lastRefreshed, setLastRefreshed] = useState<Record<string, string>>({});
-
-  // Mutation for validating bets
-  const validateMutation = useMutation({
-    mutationFn: validateBet,
-    onSuccess: (response, variables) => {
-      // Create a unique key for this bet
-      const key = `${variables.playerName}-${variables.market}-${variables.line}`;
-      setValidationResults(prev => ({
-        ...prev,
-        [key]: response.data,
-      }));
-    },
-  });
-
-  const handleValidate = (e: React.MouseEvent, opp: Opportunity) => {
-    e.preventDefault(); // Prevent link navigation
-    e.stopPropagation();
-
-    // Extract player name from selection if not directly available
-    const playerName = extractPlayerName(opp.selection, opp.playerName);
-
-    console.log('[Validate] Button clicked', {
-      id: opp.id,
-      playerName,
-      oppPlayerName: opp.playerName,
-      selection: opp.selection,
-      market: opp.market,
-      line: opp.line,
-    });
-
-    if (!playerName || opp.line === undefined) {
-      console.warn('[Validate] Missing playerName or line, skipping validation');
-      return;
-    }
-
-    const key = `${playerName}-${opp.market}-${opp.line}`;
-
-    // Don't validate again if already done
-    if (validationResults[key] !== undefined) {
-      console.log('[Validate] Already validated, skipping', { key });
-      return;
-    }
-
-    console.log('[Validate] Starting validation request', { playerName, market: opp.market, line: opp.line });
-    setValidatingIds(prev => new Set(prev).add(opp.id));
-
-    validateMutation.mutate(
-      {
-        playerName,
-        market: opp.market,
-        line: opp.line,
-        selection: opp.selection,
-        matchCount: 10,
-      },
-      {
-        onSuccess: (response) => {
-          console.log('[Validate] Success', { key, response });
-        },
-        onError: (error) => {
-          console.error('[Validate] Error', { key, error });
-        },
-        onSettled: () => {
-          console.log('[Validate] Settled', { key });
-          setValidatingIds(prev => {
-            const next = new Set(prev);
-            next.delete(opp.id);
-            return next;
-          });
-        },
-      }
-    );
-  };
-
-  const getValidationResult = (opp: Opportunity): ValidationResult | null | undefined => {
-    const playerName = extractPlayerName(opp.selection, opp.playerName);
-    if (!playerName || opp.line === undefined) return undefined;
-    const key = `${playerName}-${opp.market}-${opp.line}`;
-    return validationResults[key];
-  };
-  // NBA validation is pre-computed - use opp.nbaValidation directly from API response
 
   // Handler for refreshing live odds
   const handleRefresh = async (e: React.MouseEvent, opp: Opportunity) => {
@@ -424,87 +339,6 @@ export default function Opportunities() {
         return next;
       });
     }
-  };
-
-  // Handler for team/match validation (corners, BTTS, 1X2)
-  const handleTeamValidate = async (e: React.MouseEvent, opp: Opportunity, homeTeam: string, awayTeam: string) => {
-    e.preventDefault();
-    e.stopPropagation();
-
-    const marketType = getTeamMarketType(opp.market);
-    const key = `${opp.id}-${opp.market}`;
-
-    console.log('[TeamValidate] Button clicked', {
-      id: opp.id,
-      market: opp.market,
-      marketType,
-      selection: opp.selection,
-      line: opp.line,
-      homeTeam,
-      awayTeam,
-    });
-
-    if (!marketType) {
-      console.warn('[TeamValidate] Unknown market type, skipping');
-      return;
-    }
-
-    // Don't validate again if already done
-    if (teamValidationResults[key] !== undefined) {
-      console.log('[TeamValidate] Already validated, skipping', { key });
-      return;
-    }
-
-    setTeamValidatingIds(prev => new Set(prev).add(opp.id));
-
-    try {
-      let result: TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null = null;
-
-      if (marketType === 'btts') {
-        // BTTS validation - needs both teams
-        const response = await validateBTTS(homeTeam, awayTeam, opp.selection, 10);
-        result = response.data;
-      } else if (marketType === '1x2') {
-        // Match result validation
-        const response = await validateMatchResult(homeTeam, awayTeam, opp.selection, 10);
-        result = response.data;
-      } else {
-        // Team corners/goals validation
-        // Determine which team based on selection
-        const teamName = extractTeamName(opp.selection, homeTeam, awayTeam) || homeTeam;
-        const response = await validateTeamBet({
-          teamName,
-          market: opp.market,
-          line: opp.line ?? 0,
-          selection: opp.selection,
-          matchCount: 10,
-        });
-        result = response.data;
-      }
-
-      console.log('[TeamValidate] Success', { key, result });
-      setTeamValidationResults(prev => ({
-        ...prev,
-        [key]: result,
-      }));
-    } catch (error) {
-      console.error('[TeamValidate] Error', { key, error });
-      setTeamValidationResults(prev => ({
-        ...prev,
-        [key]: null,
-      }));
-    } finally {
-      setTeamValidatingIds(prev => {
-        const next = new Set(prev);
-        next.delete(opp.id);
-        return next;
-      });
-    }
-  };
-
-  const getTeamValidationResult = (opp: Opportunity): TeamValidationResult | BTTSValidationResult | MatchResultValidationResult | null | undefined => {
-    const key = `${opp.id}-${opp.market}`;
-    return teamValidationResults[key];
   };
 
   // Persist filters to localStorage (except search query)
@@ -549,35 +383,12 @@ export default function Opportunities() {
     },
     refetchInterval: 60000,
   });
-  // NBA validation is pre-computed on the server - no auto-validation needed
+  // All validation is pre-computed on the server - no client-side validation needed
 
-  // Calculate grade for an opportunity (inline for useMemo)
+  // Calculate grade for an opportunity using pre-computed validation
   const calculateOpportunityGradeResult = (opp: Opportunity): GradeResult => {
-    let hitRate: number | null = null;
-    let sampleSize: number | null = null;
-
-    if (opp.nbaValidation) {
-      hitRate = opp.nbaValidation.hitRate;
-      sampleSize = opp.nbaValidation.matchesChecked;
-    } else {
-      const playerName = extractPlayerName(opp.selection, opp.playerName);
-      if (playerName && opp.line !== undefined) {
-        const key = `${playerName}-${opp.market}-${opp.line}`;
-        const validation = validationResults[key];
-        if (validation) {
-          hitRate = validation.hitRate;
-          sampleSize = validation.matchesChecked;
-        }
-      }
-    }
-    if (hitRate === null) {
-      const key = `${opp.id}-${opp.market}`;
-      const teamVal = teamValidationResults[key];
-      if (teamVal && 'hitRate' in teamVal) {
-        hitRate = (teamVal as TeamValidationResult).hitRate;
-        sampleSize = (teamVal as TeamValidationResult).matchesChecked;
-      }
-    }
+    const hitRate = opp.nbaValidation?.hitRate ?? null;
+    const sampleSize = opp.nbaValidation?.matchesChecked ?? null;
 
     return calculateGrade({
       evPercent: opp.evPercent,
@@ -595,15 +406,24 @@ export default function Opportunities() {
 
   const groupedMatches = useMemo(() => {
     if (!data?.data) return [];
-    // Filter out tracked, removed bets, and filter by selected grades
+    // Filter out tracked, removed bets, bets from same player+match as tracked bet, and filter by selected grades
     const filteredData = data.data.filter(opp => {
+      // Hide if this specific bet is tracked or removed
       if (trackedIds.has(opp.id) || removedIds.has(opp.id)) return false;
+
+      // Hide other bets from the same player in the same match if one is already tracked
+      // This prevents betting on the same player twice in one match
+      const playerName = opp.playerName || extractPlayerName(opp.selection);
+      if (playerName && isPlayerMatchTracked(opp.fixtureId, playerName)) {
+        return false;
+      }
+
       const grade = getOpportunityGrade(opp);
       return selectedGrades.has(grade);
     });
     // Group by match, sort by selected option, and limit to 10 matches
     return groupByMatch(filteredData, filters.sortBy).slice(0, 10);
-  }, [data?.data, filters.sortBy, trackedIds, removedIds, selectedGrades, validationResults, teamValidationResults]);
+  }, [data?.data, filters.sortBy, trackedIds, removedIds, selectedGrades, isPlayerMatchTracked]);
 
   // Get soccer fixture IDs for stats fetching
   const soccerFixtureIds = useMemo(() => {
@@ -1554,20 +1374,11 @@ export default function Opportunities() {
                               );
                             })()}
 
-                            {/* Football Validation (for soccer player props) */}
-                            {match.sport === 'soccer' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && extractPlayerName(opp.selection, opp.playerName) && (() => {
-                              const validation = getValidationResult(opp);
-                              const isValidating = validatingIds.has(opp.id);
+                            {/* Soccer Player Props Validation (auto-loaded from server) */}
+                            {match.sport === 'soccer' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && (() => {
+                              const validation = opp.nbaValidation; // Uses pre-computed validation from server
 
-                              // Already validated - show result
-                              if (validation !== undefined) {
-                                if (validation === null) {
-                                  return (
-                                    <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-500 text-xs">
-                                      No historical data
-                                    </div>
-                                  );
-                                }
+                              if (validation) {
                                 return (
                                   <div className={clsx(
                                     'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
@@ -1576,134 +1387,46 @@ export default function Opportunities() {
                                     validation.hitRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
                                   )}>
                                     <span className="font-bold">{validation.hits}/{validation.matchesChecked}</span>
-                                    <span className="text-slate-400">({validation.hitRate.toFixed(0)}%)</span>
-                                    <span className="text-slate-500">avg: {validation.avgValue.toFixed(1)}</span>
+                                    <span className="text-slate-400">({validation.hitRate}%)</span>
+                                    <span className="text-slate-500">avg: {validation.avgValue}</span>
                                   </div>
                                 );
                               }
 
-                              // Validating - show spinner
-                              if (isValidating) {
-                                return (
-                                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-400 text-xs">
-                                    <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin"></div>
-                                    <span>Loading...</span>
-                                  </div>
-                                );
-                              }
-
-                              // Not validated yet - show button
+                              // OpticOdds doesn't have soccer stats - show not available
                               return (
-                                <button
-                                  onClick={(e) => handleValidate(e, opp)}
-                                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 hover:text-purple-300 text-xs font-medium transition-all border border-purple-500/30"
-                                  title="Check historical hit rate"
-                                >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                                  </svg>
-                                  Load Hit Rate
-                                </button>
+                                <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/30 text-slate-500 text-xs" title="Soccer stats not available via OpticOdds">
+                                  <span>⚽</span>
+                                  <span>Stats N/A</span>
+                                </div>
                               );
                             })()}
 
-                            {/* Soccer Team Market Validation (corners, BTTS, 1X2, etc.) */}
+                            {/* Soccer Team Market Validation (auto-loaded from server) */}
                             {match.sport === 'soccer' && isTeamMarket(opp.market) && !isPlayerProp(opp.market) && (() => {
-                              const teamValidation = getTeamValidationResult(opp);
-                              const isValidating = teamValidatingIds.has(opp.id);
-                              const marketType = getTeamMarketType(opp.market);
+                              const validation = opp.nbaValidation; // Uses pre-computed validation from server
 
-                              // Already validated - show result
-                              if (teamValidation !== undefined) {
-                                if (teamValidation === null) {
-                                  return (
-                                    <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-500 text-xs">
-                                      No historical data
-                                    </div>
-                                  );
-                                }
-
-                                // BTTS validation result
-                                if (marketType === 'btts' && 'combinedRate' in teamValidation) {
-                                  const btts = teamValidation as BTTSValidationResult;
-                                  return (
-                                    <div className={clsx(
-                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
-                                      btts.combinedRate >= 70 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
-                                      btts.combinedRate >= 50 && btts.combinedRate < 70 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
-                                      btts.combinedRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                    )}>
-                                      <span className="font-bold">{btts.combinedRate.toFixed(0)}%</span>
-                                      <span className="text-slate-400">BTTS</span>
-                                      <span className="text-slate-500">H:{btts.homeTeamBTTSRate.toFixed(0)}%</span>
-                                      <span className="text-slate-500">A:{btts.awayTeamBTTSRate.toFixed(0)}%</span>
-                                    </div>
-                                  );
-                                }
-
-                                // 1X2 validation result
-                                if (marketType === '1x2' && 'homeWinRate' in teamValidation) {
-                                  const result = teamValidation as MatchResultValidationResult;
-                                  const sel = opp.selection.toLowerCase();
-                                  const relevantRate = sel.includes('home') || sel === '1' ? result.homeWinRate
-                                    : sel.includes('draw') || sel === 'x' ? result.drawRate
-                                    : result.awayWinRate;
-                                  return (
-                                    <div className={clsx(
-                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
-                                      relevantRate >= 50 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
-                                      relevantRate >= 30 && relevantRate < 50 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
-                                      relevantRate < 30 && 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                    )}>
-                                      <span className="font-bold">{relevantRate.toFixed(0)}%</span>
-                                      <span className="text-slate-400">form</span>
-                                      <span className="text-emerald-400">{result.homeForm}</span>
-                                      <span className="text-slate-500">vs</span>
-                                      <span className="text-cyan-400">{result.awayForm}</span>
-                                    </div>
-                                  );
-                                }
-
-                                // Team corners/goals validation result
-                                if ('hitRate' in teamValidation) {
-                                  const team = teamValidation as TeamValidationResult;
-                                  return (
-                                    <div className={clsx(
-                                      'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
-                                      team.hitRate >= 70 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
-                                      team.hitRate >= 50 && team.hitRate < 70 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
-                                      team.hitRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
-                                    )}>
-                                      <span className="font-bold">{team.hits}/{team.matchesChecked}</span>
-                                      <span className="text-slate-400">({team.hitRate.toFixed(0)}%)</span>
-                                      <span className="text-slate-500">avg: {team.avgValue.toFixed(1)}</span>
-                                    </div>
-                                  );
-                                }
-                              }
-
-                              // Validating - show spinner
-                              if (isValidating) {
+                              if (validation) {
                                 return (
-                                  <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-slate-700/50 text-slate-400 text-xs">
-                                    <div className="w-3 h-3 border-2 border-cyan-500/30 border-t-cyan-500 rounded-full animate-spin"></div>
-                                    <span>Loading...</span>
+                                  <div className={clsx(
+                                    'flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium',
+                                    validation.hitRate >= 70 && 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30',
+                                    validation.hitRate >= 50 && validation.hitRate < 70 && 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30',
+                                    validation.hitRate < 50 && 'bg-red-500/20 text-red-400 border border-red-500/30'
+                                  )}>
+                                    <span className="font-bold">{validation.hits}/{validation.matchesChecked}</span>
+                                    <span className="text-slate-400">({validation.hitRate}%)</span>
+                                    <span className="text-slate-500">avg: {validation.avgValue}</span>
                                   </div>
                                 );
                               }
 
-                              // Not validated yet - show button
+                              // OpticOdds doesn't have soccer stats - show not available
                               return (
-                                <button
-                                  onClick={(e) => handleTeamValidate(e, opp, match.homeTeam, match.awayTeam)}
-                                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 hover:text-cyan-300 text-xs font-medium transition-all border border-cyan-500/30"
-                                  title="Check team historical stats"
-                                >
-                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
-                                  </svg>
-                                  Load Team Stats
-                                </button>
+                                <div className="flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-700/30 text-slate-500 text-xs" title="Soccer stats not available via OpticOdds">
+                                  <span>⚽</span>
+                                  <span>Stats N/A</span>
+                                </div>
                               );
                             })()}
                           </div>

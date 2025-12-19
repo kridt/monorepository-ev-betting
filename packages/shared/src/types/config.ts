@@ -19,8 +19,10 @@ export const AppConfigSchema = z.object({
   port: z.number().default(4000),
   host: z.string().default('0.0.0.0'),
 
-  // Database
-  dbPath: z.string().default('./data/dev.db'),
+  // Database - Turso cloud or local SQLite
+  tursoDbUrl: z.string().default(''),
+  tursoAuthToken: z.string().default(''),
+  dbPath: z.string().default('./data/dev.db'), // Fallback for local dev
 
   // Scheduler
   refreshIntervalMs: z.number().default(120000),

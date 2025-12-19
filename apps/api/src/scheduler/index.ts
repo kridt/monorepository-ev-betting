@@ -10,8 +10,8 @@ const mutex = new Mutex();
 // Interval handle
 let intervalHandle: NodeJS.Timeout | null = null;
 
-// Timeout for stuck runs (90 seconds)
-const RUN_TIMEOUT_MS = 90000;
+// Timeout for stuck runs (10 minutes - validation takes time)
+const RUN_TIMEOUT_MS = 600000;
 
 /**
  * Run the pipeline with mutex protection

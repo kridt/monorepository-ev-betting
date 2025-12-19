@@ -16,7 +16,12 @@
     "test:coverage": "vitest run --coverage",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "validate-stats": "tsx src/scripts/validate-stats.ts",
+    "update-cache": "tsx src/scripts/update-player-cache.ts",
+    "cache-stats": "tsx src/scripts/update-player-cache.ts --stats",
+    "update-soccer-cache": "tsx src/scripts/update-soccer-cache.ts",
+    "soccer-cache-stats": "tsx src/scripts/update-soccer-cache.ts --stats"
   },
   "dependencies": {
     "@ev-bets/shared": "workspace:*",

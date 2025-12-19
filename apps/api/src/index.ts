@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { registerRoutes } from './routes/index.js';
 import { initDatabase } from './db/index.js';
 import { startScheduler, stopScheduler } from './scheduler/index.js';
+import { startCacheScheduler, stopCacheScheduler, startSoccerCacheScheduler, stopSoccerCacheScheduler } from './scheduler/cacheScheduler.js';
 
 const isDev = process.env.NODE_ENV !== 'production';
 
@@ -38,13 +39,17 @@ await initDatabase();
 // Register routes
 registerRoutes(app);
 
-// Start scheduler
+// Start schedulers
 startScheduler();
+startCacheScheduler(); // Updates NBA player cache daily at 9am
+startSoccerCacheScheduler(); // Updates soccer player cache daily at 3am
 
 // Graceful shutdown
 const shutdown = async (signal: string) => {
   app.log.info(`Received ${signal}. Shutting down gracefully...`);
   stopScheduler();
+  stopCacheScheduler();
+  stopSoccerCacheScheduler();
   await app.close();
   process.exit(0);
 };

@@ -173,6 +173,58 @@ export default function OpportunityDetail() {
         </div>
       </div>
 
+      {/* Historical Validation Stats */}
+      <div className="card animate-fade-in-up" style={{ animationDelay: '250ms' }}>
+        <h2 className="text-lg font-bold text-dark-100 mb-5 flex items-center gap-3">
+          <span className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-purple-600 to-pink-600">
+            <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+            </svg>
+          </span>
+          Historical Stats
+        </h2>
+        {opp.validation ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div className="p-6 rounded-xl bg-gradient-to-br from-dark-800 to-dark-800/50 border border-dark-700/30">
+              <span className="text-xs text-dark-500 uppercase tracking-wider font-semibold">Hit Rate</span>
+              <p className={clsx(
+                'text-4xl font-black mt-3',
+                opp.validation.hitRate >= 70 && 'text-emerald-400',
+                opp.validation.hitRate >= 50 && opp.validation.hitRate < 70 && 'text-yellow-400',
+                opp.validation.hitRate < 50 && 'text-red-400'
+              )}>
+                {opp.validation.hitRate}%
+              </p>
+              <div className="text-sm text-dark-400 mt-2">
+                {opp.validation.hits}/{opp.validation.matchesChecked} games
+              </div>
+            </div>
+            <div className="p-6 rounded-xl bg-gradient-to-br from-dark-800 to-dark-800/50 border border-dark-700/30">
+              <span className="text-xs text-dark-500 uppercase tracking-wider font-semibold">Average Value</span>
+              <p className="text-4xl font-black mt-3 text-cyan-400">
+                {opp.validation.avgValue}
+              </p>
+              <div className="text-sm text-dark-400 mt-2">
+                Last {opp.validation.matchesChecked} games
+              </div>
+            </div>
+            <div className="p-6 rounded-xl bg-gradient-to-br from-dark-800 to-dark-800/50 border border-dark-700/30">
+              <span className="text-xs text-dark-500 uppercase tracking-wider font-semibold">Line</span>
+              <p className="text-4xl font-black mt-3 text-dark-200">
+                {opp.validation.line}
+              </p>
+              <div className="text-sm text-dark-400 mt-2">
+                {opp.validation.direction === 'over' ? 'Over' : 'Under'}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="p-6 rounded-xl bg-dark-800/30 border border-dark-700/30 text-center">
+            <p className="text-dark-400">Stats pending - validation runs automatically on the server</p>
+          </div>
+        )}
+      </div>
+
       {/* EV Calculation */}
       <div className="card-gradient animate-fade-in-up" style={{ animationDelay: '300ms' }}>
         <h2 className="text-lg font-bold text-dark-100 mb-6 flex items-center gap-3">

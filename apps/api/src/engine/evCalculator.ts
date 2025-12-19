@@ -185,6 +185,125 @@ export function calculateOpportunities(
 }
 
 /**
+ * Calculate all bets for a grouped odds selection (regardless of EV)
+ * This stores ALL bets so we can validate them with stats
+ */
+export function calculateAllBets(
+  groupedOdds: GroupedOdds,
+  fixtureData: {
+    sport: string;
+    league: string;
+    leagueName?: string;
+    homeTeam?: string;
+    awayTeam?: string;
+    startsAt: string;
+  },
+  targetBookIds: string[]
+): EVOpportunity | null {
+  // Calculate fair odds using all methods
+  const allFairOdds = calculateAllFairOdds(groupedOdds);
+
+  // Check if we have any valid fair odds
+  const hasValidFairOdds = Object.values(allFairOdds).some(
+    result => result.fairProbability > 0
+  );
+
+  if (!hasValidFairOdds) {
+    return null;
+  }
+
+  // Calculate EV for each method/target combination
+  const calculationsByMethod: Record<FairOddsMethod, EVCalculation[]> = {} as Record<
+    FairOddsMethod,
+    EVCalculation[]
+  >;
+
+  let bestEV: EVOpportunity['bestEV'] | null = null;
+
+  for (const method of FAIR_ODDS_METHODS) {
+    const fairOddsResult = allFairOdds[method];
+    const calculations = calculateEVForTargets(groupedOdds, fairOddsResult, targetBookIds);
+    calculationsByMethod[method] = calculations;
+
+    // Find best EV (even if negative - we want the best one)
+    for (const calc of calculations) {
+      if (!bestEV || calc.evPercent > bestEV.evPercent) {
+        bestEV = {
+          evPercent: calc.evPercent,
+          targetBookId: calc.targetBookId,
+          targetBookName: calc.targetBookName,
+          method: calc.method,
+          offeredOdds: calc.offeredDecimalOdds,
+          fairOdds: calc.fairDecimalOdds,
+        };
+      }
+    }
+  }
+
+  // Return even if EV is negative - we want ALL bets
+  if (!bestEV) {
+    // Fallback: create a default bestEV from first target book
+    const firstTargetOdds = groupedOdds.odds.find(o => targetBookIds.includes(o.sportsbookId));
+    if (!firstTargetOdds) {
+      return null;
+    }
+    const firstFairOdds = allFairOdds[FAIR_ODDS_METHODS[0]];
+    bestEV = {
+      evPercent: calculateEV(firstFairOdds.fairProbability, firstTargetOdds.decimalOdds),
+      targetBookId: firstTargetOdds.sportsbookId,
+      targetBookName: firstTargetOdds.sportsbookName,
+      method: FAIR_ODDS_METHODS[0],
+      offeredOdds: firstTargetOdds.decimalOdds,
+      fairOdds: firstFairOdds.fairDecimalOdds,
+    };
+  }
+
+  const opportunityId = generateOpportunityId(groupedOdds, bestEV.targetBookId);
+
+  // Extract book odds for inline display (sorted: target books first, then by odds desc)
+  const bookOdds: BookOdds[] = groupedOdds.odds
+    .map(o => ({
+      sportsbookId: o.sportsbookId,
+      sportsbookName: o.sportsbookName,
+      decimalOdds: o.decimalOdds,
+      impliedProbability: o.impliedProbability,
+      isTarget: o.isTarget,
+      isSharp: o.isSharp,
+      isOutlier: o.isOutlier,
+    }))
+    .sort((a, b) => {
+      // Target books first
+      if (a.isTarget && !b.isTarget) return -1;
+      if (!a.isTarget && b.isTarget) return 1;
+      // Then by odds descending (higher odds = better for bettor)
+      return b.decimalOdds - a.decimalOdds;
+    });
+
+  return {
+    id: opportunityId,
+    fixtureId: groupedOdds.fixtureId,
+    sport: fixtureData.sport,
+    league: fixtureData.league,
+    leagueName: fixtureData.leagueName,
+    homeTeam: fixtureData.homeTeam,
+    awayTeam: fixtureData.awayTeam,
+    startsAt: fixtureData.startsAt,
+    market: groupedOdds.market,
+    selection: groupedOdds.selection,
+    selectionKey: groupedOdds.selectionKey,
+    line: groupedOdds.line,
+    playerId: groupedOdds.playerId,
+    playerName: groupedOdds.playerName,
+    bestEV,
+    calculations: calculationsByMethod,
+    fairOdds: allFairOdds,
+    bookOdds,
+    bookCount: groupedOdds.odds.length,
+    timestamp: new Date().toISOString(),
+  };
+}
+
+/**
  * Generate human-readable explanation bullets for an opportunity
  */
 export function generateExplanation(opportunity: EVOpportunity): string[] {

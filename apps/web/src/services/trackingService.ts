@@ -292,6 +292,51 @@ export function subscribeToTrackedBetIds(
 }
 
 /**
+ * Player+Match key type for tracking which player/match combos have been bet on
+ */
+export type PlayerMatchKey = string;
+
+/**
+ * Create a unique key for a player+match combination
+ * Format: fixtureId::playerName (normalized)
+ */
+export function createPlayerMatchKey(fixtureId: string, playerName: string | undefined | null): PlayerMatchKey | null {
+  if (!playerName || !fixtureId) return null;
+  // Normalize: lowercase, trim whitespace
+  return `${fixtureId}::${playerName.toLowerCase().trim()}`;
+}
+
+/**
+ * Subscribe to tracked player+match combinations
+ * Returns a Set of PlayerMatchKey strings representing which player+match combos have been bet on
+ */
+export function subscribeToTrackedPlayerMatches(
+  callback: (playerMatches: Set<PlayerMatchKey>) => void
+): Unsubscribe {
+  const q = query(trackedBetsCollection);
+
+  return onSnapshot(q, (snapshot) => {
+    const playerMatches = new Set<PlayerMatchKey>();
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const fixtureId = data.fixtureId as string;
+      const playerName = data.playerName as string | undefined;
+
+      // Only add if we have a player name (skip team bets)
+      if (playerName) {
+        const key = createPlayerMatchKey(fixtureId, playerName);
+        if (key) {
+          playerMatches.add(key);
+        }
+      }
+    }
+
+    callback(playerMatches);
+  });
+}
+
+/**
  * Get tracking statistics
  */
 export async function getTrackingStats(): Promise<{

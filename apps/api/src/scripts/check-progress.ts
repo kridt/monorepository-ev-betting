@@ -1,0 +1,12 @@
+import { config } from 'dotenv';
+config();
+import { createClient } from '@libsql/client';
+const client = createClient({ url: process.env.TURSO_DATABASE_URL!, authToken: process.env.TURSO_AUTH_TOKEN! });
+const total = await client.execute('SELECT COUNT(*) as c FROM opportunities WHERE sport = "soccer"');
+const validated = await client.execute('SELECT COUNT(*) as c FROM opportunities WHERE sport = "soccer" AND nba_validation_json IS NOT NULL AND nba_validation_json NOT LIKE "%error%"');
+const pending = await client.execute('SELECT COUNT(*) as c FROM opportunities WHERE sport = "soccer" AND nba_validation_json IS NULL');
+console.log('Soccer Opportunities:');
+console.log('  Total:', total.rows[0].c);
+console.log('  Validated:', validated.rows[0].c);
+console.log('  Pending:', pending.rows[0].c);
+client.close();
