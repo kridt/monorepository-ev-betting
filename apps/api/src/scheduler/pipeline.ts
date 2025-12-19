@@ -38,8 +38,8 @@ import { config } from '../config.js';
 // NBA is ALWAYS included regardless of user settings
 const ALWAYS_INCLUDED_LEAGUES = ['nba'];
 
-// Memory optimization: Process fixtures in batches
-const FIXTURE_BATCH_SIZE = 20;
+// Memory optimization: Process fixtures in smaller batches to avoid OOM on Render
+const FIXTURE_BATCH_SIZE = 5;
 
 /**
  * Main data pipeline that runs on schedule
@@ -189,6 +189,11 @@ export async function runPipeline(): Promise<{
 
       // Clear batch array to help garbage collection
       batchOpportunities.length = 0;
+
+      // Small delay between batches to allow GC to run
+      if (batchStart + FIXTURE_BATCH_SIZE < allFixtures.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
     }
 
     console.info(`[Pipeline] Found ${opportunitiesFound} total bets to track and validate`);
