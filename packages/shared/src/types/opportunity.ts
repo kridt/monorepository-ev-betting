@@ -108,6 +108,30 @@ export const EVOpportunitySchema = z.object({
 
 export type EVOpportunity = z.infer<typeof EVOpportunitySchema>;
 
+// NBA/Basketball validation result
+export const NBAValidationResultSchema = z.object({
+  playerId: z.string().optional(),
+  playerName: z.string().optional(),
+  market: z.string().optional(),
+  line: z.number().optional(),
+  direction: z.enum(['over', 'under']).optional(),
+  matchesChecked: z.number(),
+  hits: z.number(),
+  hitRate: z.number(),
+  avgValue: z.number(),
+  seasonAvg: z.number().optional(),
+  avgMargin: z.number().optional(),
+  recentGames: z.array(z.object({
+    date: z.string(),
+    opponent: z.string(),
+    value: z.number(),
+    hit: z.boolean(),
+    isHome: z.boolean().optional(),
+  })).optional(),
+});
+
+export type NBAValidationResult = z.infer<typeof NBAValidationResultSchema>;
+
 // Summary for list view
 export const EVOpportunitySummarySchema = z.object({
   id: z.string(),
@@ -131,6 +155,8 @@ export const EVOpportunitySummarySchema = z.object({
   bookCount: z.number(),
   // Individual book odds for inline display
   bookOdds: z.array(BookOddsSchema).optional(),
+  // Pre-computed validation (NBA/basketball or soccer player props)
+  nbaValidation: NBAValidationResultSchema.optional(),
 });
 
 export type EVOpportunitySummary = z.infer<typeof EVOpportunitySummarySchema>;

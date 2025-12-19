@@ -202,24 +202,26 @@ export async function validateBet(params: ValidateBetParams): Promise<Validation
   });
 }
 
-// NBA Validation (Ball Don't Lie API)
+// NBA Validation (from pre-computed server data)
 export interface NBAValidationResult {
-  playerName: string;
-  playerId: number;
-  market: string;
-  line: number;
-  direction: 'over' | 'under';
+  playerName?: string;
+  playerId?: string | number;
+  market?: string;
+  line?: number;
+  direction?: 'over' | 'under';
   matchesChecked: number;
   hits: number;
   hitRate: number; // 0-100
-  recentGames: {
+  recentGames?: {
     date: string;
     opponent: string;
     value: number;
     hit: boolean;
+    isHome?: boolean;
   }[];
   avgValue: number;
   seasonAvg?: number;
+  avgMargin?: number;
 }
 
 export interface NBAValidationResponse {
