@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, refreshOpportunity, type NBAValidationResult, type OpportunityResponse } from '../api/client';
-// NBA validation is now pre-computed on the server and included in the API response (opp.nbaValidation)
+// NBA validation is pre-computed on server and included in API response (opp.nbaValidation) - build: 2025-12-20
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
 import { useRemoved } from '../hooks/useRemoved';
