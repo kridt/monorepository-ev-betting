@@ -712,13 +712,17 @@ async function validateSoccerOpportunity(
 ): Promise<ValidationResult | null> {
   // Check if it's a player prop
   if (!isPlayerProp(opp.market)) {
+    console.log(`[SoccerValidation] ${opp.id}: Not a player prop (${opp.market})`);
     return null; // Only player props supported for now
   }
 
   const playerName = extractPlayerName(opp.selection, opp.playerName ?? undefined);
   if (!playerName) {
+    console.log(`[SoccerValidation] ${opp.id}: Could not extract player name from "${opp.selection}"`);
     return null;
   }
+
+  console.log(`[SoccerValidation] ${opp.id}: Validating ${playerName} for ${opp.market} ${opp.line}`);
 
   // Try to find SportMonks player via ID mapping
   const mapping = await findSportMonksPlayer(
@@ -728,6 +732,7 @@ async function validateSoccerOpportunity(
   );
 
   if (!mapping.sportMonksPlayerId) {
+    console.log(`[SoccerValidation] ${opp.id}: No SportMonks mapping, trying cache for "${playerName}"`);
     // Try direct name search in cache
     const cachedPlayer = await getSoccerPlayerByName(
       playerName,
@@ -735,15 +740,20 @@ async function validateSoccerOpportunity(
     );
 
     if (!cachedPlayer) {
+      console.log(`[SoccerValidation] ${opp.id}: Player "${playerName}" not found in cache`);
       return null;
     }
+
+    console.log(`[SoccerValidation] ${opp.id}: Found player in cache: ${cachedPlayer.name} (ID: ${cachedPlayer.id})`);
 
     // Use cached player
     const statKey = mapSoccerMarketToStatKey(opp.market);
     if (!statKey) {
+      console.log(`[SoccerValidation] ${opp.id}: No stat key mapping for market "${opp.market}"`);
       return null;
     }
 
+    console.log(`[SoccerValidation] ${opp.id}: Calculating hit rate for stat "${statKey}"`);
     const result = await calculateSoccerHitRate(
       cachedPlayer.id,
       statKey,
@@ -753,8 +763,12 @@ async function validateSoccerOpportunity(
     );
 
     if (!result) {
+      console.log(`[SoccerValidation] ${opp.id}: No hit rate result (no games with this stat?)`);
       return null;
     }
+
+    console.log(`[SoccerValidation] ${opp.id}: Success! Hit rate: ${result.hitRate}% (${result.hits}/${result.total})`);
+
 
     return {
       playerId: cachedPlayer.id.toString(),
