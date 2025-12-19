@@ -1310,6 +1310,8 @@ export default function Opportunities() {
                             {/* NBA Validation (for basketball player props) - Pre-computed from server */}
                             {match.sport === 'basketball' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && (() => {
                               const nbaValidation = opp.nbaValidation;
+                              // Debug: log what we're receiving
+                              console.log('[NBA Debug]', opp.id, 'nbaValidation:', nbaValidation, 'keys:', Object.keys(opp));
 
                               // Show validation result if available
                               if (nbaValidation) {
