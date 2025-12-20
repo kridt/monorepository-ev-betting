@@ -1,10 +1,17 @@
 import type { FastifyInstance } from 'fastify';
 import { getSchedulerStatus } from '../scheduler/index.js';
 import { db, schema } from '../db/index.js';
-import { sql } from 'drizzle-orm';
+import { sql, eq } from 'drizzle-orm';
 import { fetchLeagues, fetchFixtures } from '../services/opticOddsClient.js';
 import { config } from '../config.js';
-import { prePopulateAllPlayers, getCacheStats } from '../services/ballDontLie.js';
+import {
+  prePopulateAllPlayers,
+  getCacheStats,
+  searchPlayers,
+  findOrCreatePlayer,
+  normalizeName,
+  generateNameVariants,
+} from '../services/ballDontLie.js';
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/health', async (_request, _reply) => {
@@ -183,6 +190,211 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
       },
       cacheBefore: statsBefore,
       cacheAfter: statsAfter,
+    };
+  });
+
+  /**
+   * GET /health/verify-nba-players
+   * Verify all NBA player names from current opportunities can be found
+   */
+  app.get('/health/verify-nba-players', async (_request, _reply) => {
+    // Get all unique NBA player names from opportunities
+    const nbaOpportunities = await db.query.opportunities.findMany({
+      where: eq(schema.opportunities.sport, 'basketball'),
+    });
+
+    // Extract unique player names
+    const playerNames = new Set<string>();
+    for (const opp of nbaOpportunities) {
+      if (opp.playerName) {
+        playerNames.add(opp.playerName);
+      }
+      // Also try to extract from selection
+      const match = opp.selection.match(/^([A-Za-z\s\-'\.]+?)\s+(Over|Under)/i);
+      if (match) {
+        playerNames.add(match[1].trim());
+      }
+    }
+
+    const results: {
+      found: Array<{ name: string; bdlName: string; bdlId: number }>;
+      notFound: Array<{ name: string; normalized: string; variants: string[]; searchResults: string[] }>;
+    } = {
+      found: [],
+      notFound: [],
+    };
+
+    // Test each player name
+    for (const name of playerNames) {
+      try {
+        // Check if already in cache
+        const cached = await db.query.players.findFirst({
+          where: sql`lower(${schema.players.name}) = lower(${name})`,
+        });
+
+        if (cached && cached.gamesPlayed && cached.gamesPlayed > 0) {
+          results.found.push({
+            name,
+            bdlName: cached.name,
+            bdlId: parseInt(cached.id.replace('bdl_', '')) || 0,
+          });
+          continue;
+        }
+
+        // Try to find in Ball Don't Lie
+        const variants = generateNameVariants(name);
+        let foundInBDL = false;
+        const allSearchResults: string[] = [];
+
+        for (const variant of variants) {
+          const searchResults = await searchPlayers(variant);
+          if (searchResults.length > 0) {
+            allSearchResults.push(...searchResults.map(p => `${p.first_name} ${p.last_name} (${p.team?.abbreviation || 'N/A'})`));
+
+            // Check for good match
+            const normalized = normalizeName(name);
+            for (const player of searchResults) {
+              const bdlNormalized = normalizeName(`${player.first_name} ${player.last_name}`);
+              if (bdlNormalized === normalized ||
+                  bdlNormalized.includes(normalized.split(' ').pop() || '') ||
+                  normalized.includes(bdlNormalized.split(' ').pop() || '')) {
+                results.found.push({
+                  name,
+                  bdlName: `${player.first_name} ${player.last_name}`,
+                  bdlId: player.id,
+                });
+                foundInBDL = true;
+                break;
+              }
+            }
+            if (foundInBDL) break;
+          }
+        }
+
+        if (!foundInBDL) {
+          results.notFound.push({
+            name,
+            normalized: normalizeName(name),
+            variants,
+            searchResults: [...new Set(allSearchResults)].slice(0, 10),
+          });
+        }
+      } catch (error) {
+        results.notFound.push({
+          name,
+          normalized: normalizeName(name),
+          variants: generateNameVariants(name),
+          searchResults: [`Error: ${error}`],
+        });
+      }
+    }
+
+    return {
+      timestamp: new Date().toISOString(),
+      totalPlayers: playerNames.size,
+      found: results.found.length,
+      notFound: results.notFound.length,
+      successRate: `${Math.round((results.found.length / playerNames.size) * 100)}%`,
+      foundPlayers: results.found,
+      notFoundPlayers: results.notFound,
+    };
+  });
+
+  /**
+   * POST /health/fix-nba-players
+   * Attempt to cache all NBA players from current opportunities
+   */
+  app.post('/health/fix-nba-players', async (_request, _reply) => {
+    // Get all unique NBA player names from opportunities
+    const nbaOpportunities = await db.query.opportunities.findMany({
+      where: eq(schema.opportunities.sport, 'basketball'),
+    });
+
+    // Extract unique player names
+    const playerNames = new Set<string>();
+    for (const opp of nbaOpportunities) {
+      if (opp.playerName) {
+        playerNames.add(opp.playerName);
+      }
+      const match = opp.selection.match(/^([A-Za-z\s\-'\.]+?)\s+(Over|Under)/i);
+      if (match) {
+        playerNames.add(match[1].trim());
+      }
+    }
+
+    const results = {
+      total: playerNames.size,
+      cached: 0,
+      failed: 0,
+      errors: [] as string[],
+    };
+
+    // Try to cache each player
+    for (const name of playerNames) {
+      try {
+        const player = await findOrCreatePlayer(name);
+        if (player) {
+          results.cached++;
+        } else {
+          results.failed++;
+          results.errors.push(`Not found: ${name}`);
+        }
+      } catch (error) {
+        results.failed++;
+        results.errors.push(`Error caching ${name}: ${error}`);
+      }
+    }
+
+    return {
+      timestamp: new Date().toISOString(),
+      status: 'completed',
+      results,
+    };
+  });
+
+  /**
+   * GET /health/search-player/:name
+   * Debug endpoint to test player search
+   */
+  app.get('/health/search-player/:name', async (request, _reply) => {
+    const { name } = request.params as { name: string };
+
+    const normalized = normalizeName(name);
+    const variants = generateNameVariants(name);
+
+    // Search Ball Don't Lie with each variant
+    const searchResults: Record<string, Array<{ name: string; team: string; id: number }>> = {};
+
+    for (const variant of variants) {
+      try {
+        const results = await searchPlayers(variant);
+        searchResults[variant] = results.map(p => ({
+          name: `${p.first_name} ${p.last_name}`,
+          team: p.team?.full_name || 'N/A',
+          id: p.id,
+        }));
+      } catch (error) {
+        searchResults[variant] = [{ name: `Error: ${error}`, team: '', id: 0 }];
+      }
+    }
+
+    // Check cache
+    const cached = await db.query.players.findFirst({
+      where: sql`lower(${schema.players.name}) LIKE ${`%${normalized}%`}`,
+    });
+
+    // Check aliases
+    const aliases = await db.query.playerNameAliases.findMany({
+      where: sql`${schema.playerNameAliases.normalizedAlias} LIKE ${`%${normalized}%`}`,
+    });
+
+    return {
+      input: name,
+      normalized,
+      variants,
+      searchResults,
+      cachedPlayer: cached ? { id: cached.id, name: cached.name, gamesPlayed: cached.gamesPlayed } : null,
+      matchingAliases: aliases.map(a => ({ playerId: a.playerId, alias: a.alias })),
     };
   });
 }
