@@ -374,18 +374,31 @@ export const soccerPlayerGameStats = sqliteTable('soccer_player_game_stats', {
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 
-// Player ID mapping - maps OpticOdds player IDs to SportMonks IDs
+// Player ID mapping - maps OpticOdds player IDs to SportMonks/BallDontLie IDs
 export const playerIdMapping = sqliteTable('player_id_mapping', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   opticOddsPlayerId: text('opticodds_player_id'), // OpticOdds player ID
   opticOddsPlayerName: text('opticodds_player_name'),
   sportMonksPlayerId: integer('sportmonks_player_id'), // SportMonks player ID
   sportMonksPlayerName: text('sportmonks_player_name'),
+  ballDontLiePlayerId: integer('balldontlie_player_id'), // Ball Don't Lie player ID
+  ballDontLiePlayerName: text('balldontlie_player_name'),
+  normalizedName: text('normalized_name'), // Lowercase, no special chars
   teamName: text('team_name'),
   sport: text('sport').notNull(), // 'soccer' or 'basketball'
   confidence: real('confidence').default(1.0), // Match confidence 0-1
   verified: integer('verified', { mode: 'boolean' }).default(false), // Manual verification
   lastUpdated: text('last_updated').default(sql`CURRENT_TIMESTAMP`),
+  createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
+});
+
+// Player name aliases - common name variations
+export const playerNameAliases = sqliteTable('player_name_aliases', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  playerId: text('player_id').notNull(), // Internal player ID (bdl_xxx)
+  alias: text('alias').notNull(), // The alias name
+  normalizedAlias: text('normalized_alias').notNull(), // Lowercase, no special chars
+  source: text('source').default('auto'), // 'auto', 'manual', 'odds_api'
   createdAt: text('created_at').default(sql`CURRENT_TIMESTAMP`),
 });
 

@@ -12,8 +12,66 @@
  */
 
 import { db, schema } from '../db/index.js';
-import { eq, desc, and, sql, inArray } from 'drizzle-orm';
+import { eq, desc, and, sql, inArray, like, or } from 'drizzle-orm';
 import { config } from '../config.js';
+
+// ============================================================================
+// Name Normalization Utilities
+// ============================================================================
+
+/**
+ * Normalize a player name for matching:
+ * - Lowercase
+ * - Remove special characters (except spaces)
+ * - Handle suffixes (Jr., III, etc.)
+ * - Handle hyphenated names
+ */
+export function normalizeName(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    // Remove common suffixes for matching
+    .replace(/\s+(jr\.?|sr\.?|iii|ii|iv|v)$/i, '')
+    // Replace hyphens with spaces for matching
+    .replace(/-/g, ' ')
+    // Remove periods and apostrophes
+    .replace(/[.']/g, '')
+    // Collapse multiple spaces
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Generate name variants for searching
+ */
+export function generateNameVariants(name: string): string[] {
+  const variants = new Set<string>();
+  const normalized = normalizeName(name);
+  variants.add(normalized);
+
+  // Original name (lowercased)
+  variants.add(name.toLowerCase().trim());
+
+  // First + Last name
+  const parts = normalized.split(' ');
+  if (parts.length >= 2) {
+    variants.add(`${parts[0]} ${parts[parts.length - 1]}`);
+  }
+
+  // Handle hyphenated names: "Gilgeous-Alexander" -> "Gilgeous Alexander", "Alexander"
+  if (name.includes('-')) {
+    const dehyphenated = name.replace(/-/g, ' ');
+    variants.add(normalizeName(dehyphenated));
+
+    // Just the last part of hyphenated name
+    const lastPart = name.split('-').pop() || '';
+    if (lastPart && parts.length >= 1) {
+      variants.add(`${parts[0]} ${lastPart.toLowerCase()}`);
+    }
+  }
+
+  return Array.from(variants);
+}
 
 // ============================================================================
 // Configuration
@@ -637,16 +695,51 @@ export async function calculateHitRateFromCache(
 // ============================================================================
 
 /**
+ * Find player in cache by checking multiple name variants
+ */
+async function findPlayerInCache(playerName: string): Promise<typeof schema.players.$inferSelect | null> {
+  const variants = generateNameVariants(playerName);
+  const normalized = normalizeName(playerName);
+
+  // Try exact match on name
+  for (const variant of variants) {
+    const player = await db.query.players.findFirst({
+      where: sql`lower(${schema.players.name}) = ${variant}`,
+    });
+    if (player) return player;
+  }
+
+  // Try normalized name match (handles hyphens, suffixes)
+  const player = await db.query.players.findFirst({
+    where: sql`lower(replace(replace(${schema.players.name}, '-', ' '), '.', '')) LIKE ${`%${normalized}%`}`,
+  });
+  if (player) return player;
+
+  // Check alias table
+  const alias = await db.query.playerNameAliases.findFirst({
+    where: or(
+      ...variants.map(v => eq(schema.playerNameAliases.normalizedAlias, v))
+    ),
+  });
+  if (alias) {
+    const aliasedPlayer = await db.query.players.findFirst({
+      where: eq(schema.players.id, alias.playerId),
+    });
+    return aliasedPlayer || null;
+  }
+
+  return null;
+}
+
+/**
  * Find or create a player in cache by name
  */
 export async function findOrCreatePlayer(
   playerName: string,
   teamHint?: string
 ): Promise<{ id: string; bdlPlayerId: number; name: string } | null> {
-  // First, check if player exists in our cache
-  const existingPlayer = await db.query.players.findFirst({
-    where: sql`lower(${schema.players.name}) = lower(${playerName})`,
-  });
+  // First, check if player exists in our cache with variants
+  const existingPlayer = await findPlayerInCache(playerName);
 
   if (existingPlayer && existingPlayer.gamesPlayed && existingPlayer.gamesPlayed > 0) {
     // Player exists and has game data
@@ -655,6 +748,9 @@ export async function findOrCreatePlayer(
     const hoursSinceUpdate = (Date.now() - lastUpdated.getTime()) / (1000 * 60 * 60);
 
     if (hoursSinceUpdate < 24) {
+      // Add this name as an alias if it's different
+      await addPlayerAlias(existingPlayer.id, playerName);
+
       return {
         id: existingPlayer.id,
         bdlPlayerId: parseInt(existingPlayer.id.replace('bdl_', '')) || 0,
@@ -663,38 +759,83 @@ export async function findOrCreatePlayer(
     }
   }
 
-  // Search Ball Don't Lie for player
+  // Search Ball Don't Lie for player using name variants
   console.log(`[BDL] Searching for player: ${playerName}`);
-  const searchResults = await searchPlayers(playerName);
+  const variants = generateNameVariants(playerName);
+  let searchResults: BDLPlayer[] = [];
+
+  // Try each variant until we get results
+  for (const variant of variants) {
+    searchResults = await searchPlayers(variant);
+    if (searchResults.length > 0) {
+      console.log(`[BDL] Found results using variant: "${variant}"`);
+      break;
+    }
+  }
+
+  // Also try searching by just last name for hyphenated names
+  if (searchResults.length === 0 && playerName.includes('-')) {
+    const lastName = playerName.split(/[\s-]+/).pop() || '';
+    if (lastName.length > 2) {
+      searchResults = await searchPlayers(lastName);
+      console.log(`[BDL] Trying last name only: "${lastName}", found ${searchResults.length} results`);
+    }
+  }
 
   if (searchResults.length === 0) {
-    console.log(`[BDL] No results found for: ${playerName}`);
+    console.log(`[BDL] No results found for: ${playerName} (tried ${variants.length} variants)`);
     return null;
   }
 
-  // Find best match
+  // Find best match using normalized names
   let bestMatch = searchResults[0];
-  const normalizedSearch = playerName.toLowerCase().trim();
+  let bestScore = 0;
+  const normalizedSearch = normalizeName(playerName);
 
   for (const player of searchResults) {
-    const fullName = `${player.first_name} ${player.last_name}`.toLowerCase();
-    if (fullName === normalizedSearch) {
+    const fullName = `${player.first_name} ${player.last_name}`;
+    const normalizedFull = normalizeName(fullName);
+
+    // Exact normalized match
+    if (normalizedFull === normalizedSearch) {
       bestMatch = player;
+      bestScore = 100;
       break;
     }
-    // Check team hint if provided
+
+    // Calculate similarity score
+    let score = 0;
+
+    // First name match
+    if (normalizeName(player.first_name) === normalizedSearch.split(' ')[0]) {
+      score += 40;
+    }
+
+    // Last name match (important for hyphenated)
+    const searchLastName = normalizedSearch.split(' ').pop() || '';
+    const playerLastName = normalizeName(player.last_name);
+    if (playerLastName.includes(searchLastName) || searchLastName.includes(playerLastName)) {
+      score += 40;
+    }
+
+    // Team hint bonus
     if (teamHint && player.team) {
       const teamMatch = player.team.full_name.toLowerCase().includes(teamHint.toLowerCase()) ||
-                       player.team.name.toLowerCase().includes(teamHint.toLowerCase());
+                       player.team.name.toLowerCase().includes(teamHint.toLowerCase()) ||
+                       teamHint.toLowerCase().includes(player.team.name.toLowerCase());
       if (teamMatch) {
-        bestMatch = player;
-        break;
+        score += 20;
       }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestMatch = player;
     }
   }
 
   const internalId = `bdl_${bestMatch.id}`;
-  console.log(`[BDL] Found player: ${bestMatch.first_name} ${bestMatch.last_name} (ID: ${bestMatch.id})`);
+  console.log(`[BDL] Found player: ${bestMatch.first_name} ${bestMatch.last_name} (ID: ${bestMatch.id}, score: ${bestScore})`);
 
   // Update cache
   const success = await updatePlayerCache(internalId, bestMatch.id);
@@ -796,4 +937,187 @@ export async function populateCacheForPlayers(playerNames: string[]): Promise<Ca
   console.log(`[BDL Cache] Complete: ${result.playersUpdated} updated, ${result.playersFailed} failed in ${result.duration}ms`);
 
   return result;
+}
+
+// ============================================================================
+// Player Alias Management
+// ============================================================================
+
+/**
+ * Add a player name alias (for future lookups)
+ */
+export async function addPlayerAlias(playerId: string, aliasName: string): Promise<void> {
+  const normalized = normalizeName(aliasName);
+
+  // Check if this exact alias already exists
+  const existing = await db.query.playerNameAliases.findFirst({
+    where: and(
+      eq(schema.playerNameAliases.playerId, playerId),
+      eq(schema.playerNameAliases.normalizedAlias, normalized)
+    ),
+  });
+
+  if (!existing) {
+    try {
+      await db.insert(schema.playerNameAliases).values({
+        playerId,
+        alias: aliasName,
+        normalizedAlias: normalized,
+        source: 'odds_api',
+      });
+      console.log(`[BDL] Added alias "${aliasName}" for player ${playerId}`);
+    } catch (error) {
+      // Ignore duplicate errors
+    }
+  }
+}
+
+// ============================================================================
+// Pre-populate All Active NBA Players
+// ============================================================================
+
+export interface PrePopulateResult {
+  totalPlayers: number;
+  playersAdded: number;
+  playersFailed: number;
+  aliasesCreated: number;
+  errors: string[];
+  duration: number;
+}
+
+/**
+ * Pre-populate the database with all active NBA players from Ball Don't Lie
+ * This creates entries for every active player so lookups are instant
+ */
+export async function prePopulateAllPlayers(): Promise<PrePopulateResult> {
+  const startTime = Date.now();
+  const result: PrePopulateResult = {
+    totalPlayers: 0,
+    playersAdded: 0,
+    playersFailed: 0,
+    aliasesCreated: 0,
+    errors: [],
+    duration: 0,
+  };
+
+  console.log('[BDL PrePopulate] Fetching all active NBA players...');
+
+  try {
+    // Get all active players from Ball Don't Lie
+    const allPlayers = await getAllActivePlayers();
+    result.totalPlayers = allPlayers.length;
+    console.log(`[BDL PrePopulate] Found ${allPlayers.length} active players`);
+
+    // Process each player
+    for (let i = 0; i < allPlayers.length; i++) {
+      const player = allPlayers[i];
+      const internalId = `bdl_${player.id}`;
+      const fullName = `${player.first_name} ${player.last_name}`;
+
+      try {
+        // Check if player already exists in cache
+        const existing = await db.query.players.findFirst({
+          where: eq(schema.players.id, internalId),
+        });
+
+        if (existing && existing.gamesPlayed && existing.gamesPlayed > 0) {
+          // Player exists with data, just ensure aliases are set
+          await ensurePlayerAliases(internalId, fullName, player);
+          continue;
+        }
+
+        // Update player cache (fetch stats and save)
+        const success = await updatePlayerCache(internalId, player.id);
+
+        if (success) {
+          result.playersAdded++;
+          // Create aliases for this player
+          const aliasCount = await ensurePlayerAliases(internalId, fullName, player);
+          result.aliasesCreated += aliasCount;
+        } else {
+          result.playersFailed++;
+          result.errors.push(`Failed to cache: ${fullName}`);
+        }
+      } catch (error) {
+        result.playersFailed++;
+        result.errors.push(`Error processing ${fullName}: ${error}`);
+      }
+
+      // Progress log every 50 players
+      if ((i + 1) % 50 === 0) {
+        console.log(`[BDL PrePopulate] Progress: ${i + 1}/${allPlayers.length} (${result.playersAdded} added)`);
+      }
+    }
+
+  } catch (error) {
+    console.error('[BDL PrePopulate] Failed to fetch players:', error);
+    result.errors.push(`Failed to fetch players: ${error}`);
+  }
+
+  result.duration = Date.now() - startTime;
+  console.log(`[BDL PrePopulate] Complete: ${result.playersAdded} added, ${result.playersFailed} failed, ${result.aliasesCreated} aliases in ${Math.round(result.duration / 1000)}s`);
+
+  return result;
+}
+
+/**
+ * Ensure all name aliases exist for a player
+ */
+async function ensurePlayerAliases(playerId: string, fullName: string, player: BDLPlayer): Promise<number> {
+  let aliasCount = 0;
+  const aliasesToAdd = new Set<string>();
+
+  // Full name
+  aliasesToAdd.add(fullName);
+
+  // First name + Last name variations
+  aliasesToAdd.add(`${player.first_name} ${player.last_name}`);
+
+  // Handle hyphenated last names - add both full and last part
+  if (player.last_name.includes('-')) {
+    const lastPart = player.last_name.split('-').pop() || '';
+    aliasesToAdd.add(`${player.first_name} ${lastPart}`);
+  }
+
+  // Add normalized versions
+  for (const alias of Array.from(aliasesToAdd)) {
+    try {
+      const normalized = normalizeName(alias);
+      const existing = await db.query.playerNameAliases.findFirst({
+        where: and(
+          eq(schema.playerNameAliases.playerId, playerId),
+          eq(schema.playerNameAliases.normalizedAlias, normalized)
+        ),
+      });
+
+      if (!existing) {
+        await db.insert(schema.playerNameAliases).values({
+          playerId,
+          alias,
+          normalizedAlias: normalized,
+          source: 'auto',
+        });
+        aliasCount++;
+      }
+    } catch (error) {
+      // Ignore duplicate errors
+    }
+  }
+
+  return aliasCount;
+}
+
+/**
+ * Get count of players in cache
+ */
+export async function getCacheStats(): Promise<{ players: number; aliases: number; games: number }> {
+  const [playersResult] = await db.select({ count: sql<number>`count(*)` }).from(schema.players);
+  const [aliasesResult] = await db.select({ count: sql<number>`count(*)` }).from(schema.playerNameAliases);
+  const [gamesResult] = await db.select({ count: sql<number>`count(*)` }).from(schema.playerGameStats);
+
+  return {
+    players: playersResult?.count || 0,
+    aliases: aliasesResult?.count || 0,
+    games: gamesResult?.count || 0,
+  };
 }

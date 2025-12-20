@@ -435,11 +435,34 @@ export async function initDatabase() {
       opticodds_player_name TEXT,
       sportmonks_player_id INTEGER,
       sportmonks_player_name TEXT,
+      balldontlie_player_id INTEGER,
+      balldontlie_player_name TEXT,
+      normalized_name TEXT,
       team_name TEXT,
       sport TEXT NOT NULL,
       confidence REAL DEFAULT 1.0,
       verified INTEGER DEFAULT 0,
       last_updated TEXT DEFAULT CURRENT_TIMESTAMP,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Add Ball Don't Lie columns if they don't exist (migration)
+  try {
+    await client.execute('ALTER TABLE player_id_mapping ADD COLUMN balldontlie_player_id INTEGER');
+    await client.execute('ALTER TABLE player_id_mapping ADD COLUMN balldontlie_player_name TEXT');
+    await client.execute('ALTER TABLE player_id_mapping ADD COLUMN normalized_name TEXT');
+  } catch {
+    // Columns already exist, ignore
+  }
+
+  await client.execute(`
+    CREATE TABLE IF NOT EXISTS player_name_aliases (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      player_id TEXT NOT NULL,
+      alias TEXT NOT NULL,
+      normalized_alias TEXT NOT NULL,
+      source TEXT DEFAULT 'auto',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     )
   `);
@@ -471,6 +494,10 @@ export async function initDatabase() {
   await client.execute('CREATE INDEX IF NOT EXISTS idx_player_mapping_opticodds ON player_id_mapping(opticodds_player_id)');
   await client.execute('CREATE INDEX IF NOT EXISTS idx_player_mapping_sportmonks ON player_id_mapping(sportmonks_player_id)');
   await client.execute('CREATE INDEX IF NOT EXISTS idx_player_mapping_name ON player_id_mapping(opticodds_player_name, team_name)');
+
+  // Player name aliases indexes
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_player_aliases_player ON player_name_aliases(player_id)');
+  await client.execute('CREATE INDEX IF NOT EXISTS idx_player_aliases_normalized ON player_name_aliases(normalized_alias)');
 
   console.info('[DB] Database initialized successfully');
 }

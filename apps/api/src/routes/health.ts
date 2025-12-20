@@ -4,6 +4,7 @@ import { db, schema } from '../db/index.js';
 import { sql } from 'drizzle-orm';
 import { fetchLeagues, fetchFixtures } from '../services/opticOddsClient.js';
 import { config } from '../config.js';
+import { prePopulateAllPlayers, getCacheStats } from '../services/ballDontLie.js';
 
 export async function healthRoutes(app: FastifyInstance): Promise<void> {
   app.get('/health', async (_request, _reply) => {
@@ -141,5 +142,47 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return results;
+  });
+
+  /**
+   * GET /health/nba-cache
+   * Get NBA player cache statistics
+   */
+  app.get('/health/nba-cache', async (_request, _reply) => {
+    const stats = await getCacheStats();
+    return {
+      timestamp: new Date().toISOString(),
+      cache: stats,
+    };
+  });
+
+  /**
+   * POST /health/prepopulate-nba
+   * Trigger NBA player pre-population (admin endpoint)
+   * This fetches ALL active NBA players from Ball Don't Lie
+   */
+  app.post('/health/prepopulate-nba', async (_request, _reply) => {
+    const statsBefore = await getCacheStats();
+
+    console.log('[Admin] Starting NBA player pre-population...');
+    const result = await prePopulateAllPlayers();
+
+    const statsAfter = await getCacheStats();
+
+    return {
+      timestamp: new Date().toISOString(),
+      status: 'completed',
+      result: {
+        totalPlayersFound: result.totalPlayers,
+        playersAdded: result.playersAdded,
+        playersFailed: result.playersFailed,
+        aliasesCreated: result.aliasesCreated,
+        durationSeconds: Math.round(result.duration / 1000),
+        errorCount: result.errors.length,
+        errors: result.errors.slice(0, 10),
+      },
+      cacheBefore: statsBefore,
+      cacheAfter: statsAfter,
+    };
   });
 }

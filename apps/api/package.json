@@ -21,7 +21,8 @@
     "update-cache": "tsx src/scripts/update-player-cache.ts",
     "cache-stats": "tsx src/scripts/update-player-cache.ts --stats",
     "update-soccer-cache": "tsx src/scripts/update-soccer-cache.ts",
-    "soccer-cache-stats": "tsx src/scripts/update-soccer-cache.ts --stats"
+    "soccer-cache-stats": "tsx src/scripts/update-soccer-cache.ts --stats",
+    "prepopulate-nba": "tsx src/scripts/prepopulate-nba-players.ts"
   },
   "dependencies": {
     "@ev-bets/shared": "workspace:*",
