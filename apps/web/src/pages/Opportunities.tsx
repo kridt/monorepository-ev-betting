@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { fetchOpportunities, fetchMethods, fetchBatchFixtureStats, refreshOpportunity, type NBAValidationResult, type OpportunityResponse } from '../api/client';
-// NBA validation is pre-computed on server and included in API response (opp.nbaValidation) - build: 2025-12-20
+// NBA validation is pre-computed on server and included in API response (opp.nbaValidation)
 import { useSettings } from '../hooks/useLocalStorage';
 import { useTracking } from '../hooks/useTracking';
 import { useRemoved } from '../hooks/useRemoved';
@@ -406,17 +406,6 @@ export default function Opportunities() {
 
   const groupedMatches = useMemo(() => {
     if (!data?.data) return [];
-    // Debug: Log raw data from API
-    const firstBball = data.data.find(o => o.sport === 'basketball');
-    if (firstBball) {
-      console.log('[API Debug] First basketball from API:', {
-        id: firstBball.id,
-        market: firstBball.market,
-        hasNbaValidation: 'nbaValidation' in firstBball,
-        nbaValidation: (firstBball as any).nbaValidation,
-        keys: Object.keys(firstBball),
-      });
-    }
     // Filter out tracked, removed bets, bets from same player+match as tracked bet, and filter by selected grades
     const filteredData = data.data.filter(opp => {
       // Hide if this specific bet is tracked or removed
@@ -1321,8 +1310,6 @@ export default function Opportunities() {
                             {/* NBA Validation (for basketball player props) - Pre-computed from server */}
                             {match.sport === 'basketball' && opp.line !== undefined && (isPlayerProp(opp.market) || isPlayerPropSelection(opp.selection)) && (() => {
                               const nbaValidation = opp.nbaValidation;
-                              // Debug: log what we're receiving
-                              console.log('[NBA Debug]', opp.id, 'nbaValidation:', nbaValidation, 'keys:', Object.keys(opp));
 
                               // Show validation result if available
                               if (nbaValidation) {

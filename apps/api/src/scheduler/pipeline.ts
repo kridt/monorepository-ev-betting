@@ -19,11 +19,12 @@ import {
   type ValidationResult,
 } from '../services/opticOddsStatsClient.js';
 import {
-  getPlayerById,
-  getPlayerByName,
-  calculateHitRateFromCache,
-  updatePlayerById,
-} from '../services/playerCache.js';
+  findOrCreatePlayer as findBDLPlayer,
+  getPlayerByName as getBDLPlayerByName,
+  calculateHitRateFromCache as calculateBDLHitRate,
+  mapMarketToStatKey as mapBDLMarketToStatKey,
+  type NBAStatKey,
+} from '../services/ballDontLie.js';
 import {
   getSoccerPlayerByName,
   calculateSoccerHitRate,
@@ -506,96 +507,64 @@ async function validateOpportunity(opp: {
   if (isPlayerProp(opp.market)) {
     const playerName = extractPlayerName(opp.selection, opp.playerName ?? undefined);
     if (!playerName) {
+      console.log(`[NBA Validation] ${opp.id}: Could not extract player name from "${opp.selection}"`);
       return null;
     }
 
-    // Try to get player from cache first
-    let playerId = opp.playerId;
-    let cachedPlayer = playerId ? await getPlayerById(playerId) : null;
+    console.log(`[NBA Validation] ${opp.id}: Validating ${playerName} for ${opp.market} ${opp.line}`);
 
-    // If not found by ID, try by name
-    if (!cachedPlayer) {
-      cachedPlayer = await getPlayerByName(playerName);
-      if (cachedPlayer) {
-        playerId = cachedPlayer.id;
-      }
-    }
-
-    // If player is in cache, use cached data for validation
-    if (cachedPlayer && playerId) {
-      const statKey = mapMarketToStatKey(opp.market);
-      if (statKey) {
-        const result = await calculateHitRateFromCache(
-          playerId,
-          statKey,
-          opp.line || 0,
-          direction,
-          10
-        );
-
-        if (result) {
-          return {
-            playerId,
-            playerName: cachedPlayer.name,
-            market: opp.market,
-            line: opp.line || 0,
-            direction,
-            matchesChecked: result.total,
-            hits: result.hits,
-            hitRate: result.hitRate,
-            avgValue: result.avgValue,
-            recentGames: result.recentGames.map(g => ({
-              ...g,
-              opponent: g.opponent || 'Unknown',
-              isHome: g.isHome ?? undefined,
-            })),
-          };
-        }
-      }
-    }
-
-    // Fallback to live API if not in cache
-    if (playerId) {
-      const result = await validatePlayerProp(
-        playerId,
-        playerName,
-        opp.market,
-        opp.line || 0,
-        direction,
-        'basketball',
-        10
-      );
-
-      // If we got data from API, try to update cache for next time
-      if (result && playerId) {
-        updatePlayerById(playerId).catch(() => {}); // Fire and forget
-      }
-
-      return result;
-    }
-
-    // Search for the player via API
-    const player = await searchPlayer(playerName, 'basketball', opp.league);
-    if (!player) {
+    // Map market to stat key
+    const statKey = mapBDLMarketToStatKey(opp.market);
+    if (!statKey) {
+      console.log(`[NBA Validation] ${opp.id}: Unsupported market "${opp.market}"`);
       return null;
     }
 
-    const result = await validatePlayerProp(
-      player.id,
-      playerName,
-      opp.market,
+    // Try to find player in Ball Don't Lie (searches API if not cached)
+    const teamHint = opp.homeTeam || opp.awayTeam || undefined;
+    const bdlPlayer = await findBDLPlayer(playerName, teamHint);
+
+    if (!bdlPlayer) {
+      console.log(`[NBA Validation] ${opp.id}: Player "${playerName}" not found in Ball Don't Lie`);
+      return null;
+    }
+
+    console.log(`[NBA Validation] ${opp.id}: Found player ${bdlPlayer.name} (ID: ${bdlPlayer.id})`);
+
+    // Calculate hit rate from cached game logs (last 20 games)
+    const result = await calculateBDLHitRate(
+      bdlPlayer.id,
+      statKey,
       opp.line || 0,
       direction,
-      'basketball',
-      10
+      20 // Last 20 games
     );
 
-    // Update cache for next time
-    if (result) {
-      updatePlayerById(player.id).catch(() => {}); // Fire and forget
+    if (!result || result.total === 0) {
+      console.log(`[NBA Validation] ${opp.id}: No game data for ${playerName}`);
+      return null;
     }
 
-    return result;
+    console.log(`[NBA Validation] ${opp.id}: Success! ${result.hits}/${result.total} (${result.hitRate}%) avg: ${result.avgValue}`);
+
+    return {
+      playerId: bdlPlayer.id,
+      playerName: bdlPlayer.name,
+      market: opp.market,
+      line: opp.line || 0,
+      direction,
+      matchesChecked: result.total,
+      hits: result.hits,
+      hitRate: result.hitRate,
+      avgValue: result.avgValue,
+      recentGames: result.recentGames.map(g => ({
+        date: g.date,
+        opponent: g.opponent,
+        value: g.value,
+        hit: g.hit,
+        isHome: g.isHome,
+      })),
+    };
   }
 
   // Check if it's a spread or moneyline (basketball only since we already filtered soccer)
@@ -620,28 +589,6 @@ async function validateOpportunity(opp: {
       return validateSpreadBet(team.id, teamName, opp.line, direction, 10);
     }
   }
-
-  return null;
-}
-
-/**
- * Map market name to stat key for cache lookup
- */
-function mapMarketToStatKey(market: string): 'points' | 'rebounds' | 'assists' | 'threes' | 'steals' | 'blocks' | 'turnovers' | 'pra' | 'pr' | 'pa' | 'ra' | null {
-  const m = market.toLowerCase();
-
-  if (m.includes('points') && m.includes('rebounds') && m.includes('assists')) return 'pra';
-  if (m.includes('pra')) return 'pra';
-  if (m.includes('points') && m.includes('rebounds')) return 'pr';
-  if (m.includes('points') && m.includes('assists')) return 'pa';
-  if (m.includes('rebounds') && m.includes('assists')) return 'ra';
-  if (m.includes('point') && !m.includes('rebounds') && !m.includes('assists')) return 'points';
-  if (m.includes('rebound')) return 'rebounds';
-  if (m.includes('assist')) return 'assists';
-  if (m.includes('three') || m.includes('3p')) return 'threes';
-  if (m.includes('steal')) return 'steals';
-  if (m.includes('block')) return 'blocks';
-  if (m.includes('turnover')) return 'turnovers';
 
   return null;
 }
