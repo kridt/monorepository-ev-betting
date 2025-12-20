@@ -397,4 +397,57 @@ export async function healthRoutes(app: FastifyInstance): Promise<void> {
       matchingAliases: aliases.map(a => ({ playerId: a.playerId, alias: a.alias })),
     };
   });
+
+  /**
+   * GET /health/test-bdl-api
+   * Test the Ball Don't Lie API directly with raw response
+   */
+  app.get('/health/test-bdl-api', async (_request, _reply) => {
+    const apiKey = config.ballDontLieApiKey;
+    const baseUrl = config.ballDontLieBaseUrl;
+
+    // Test with LeBron James
+    const testUrl = `${baseUrl}/v1/players?search=LeBron&per_page=5`;
+
+    try {
+      const response = await fetch(testUrl, {
+        headers: {
+          'Authorization': apiKey,
+        },
+      });
+
+      const status = response.status;
+      const headers = Object.fromEntries(response.headers.entries());
+      const body = await response.json();
+
+      return {
+        timestamp: new Date().toISOString(),
+        config: {
+          apiKeySet: !!apiKey,
+          apiKeyLength: apiKey?.length || 0,
+          apiKeyPreview: apiKey ? `${apiKey.substring(0, 8)}...` : 'NOT SET',
+          baseUrl,
+        },
+        request: {
+          url: testUrl,
+        },
+        response: {
+          status,
+          headers,
+          body,
+        },
+      };
+    } catch (error) {
+      return {
+        timestamp: new Date().toISOString(),
+        config: {
+          apiKeySet: !!apiKey,
+          apiKeyLength: apiKey?.length || 0,
+          apiKeyPreview: apiKey ? `${apiKey.substring(0, 8)}...` : 'NOT SET',
+          baseUrl,
+        },
+        error: String(error),
+      };
+    }
+  });
 }
