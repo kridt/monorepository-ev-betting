@@ -43,32 +43,35 @@ export function normalizeName(name: string): string {
 
 /**
  * Generate name variants for searching
+ * Ball Don't Lie API works best with single-word searches (first OR last name)
  */
 export function generateNameVariants(name: string): string[] {
   const variants = new Set<string>();
   const normalized = normalizeName(name);
+  const parts = normalized.split(' ').filter(p => p.length > 0);
+
+  // IMPORTANT: Ball Don't Lie API searches best with single words
+  // Add first name and last name as separate search terms (highest priority)
+  if (parts.length >= 1) {
+    variants.add(parts[0]); // First name only
+  }
+  if (parts.length >= 2) {
+    variants.add(parts[parts.length - 1]); // Last name only
+  }
+
+  // Handle hyphenated last names: "Gilgeous-Alexander" -> search "Alexander"
+  if (name.includes('-')) {
+    const lastPart = name.split('-').pop()?.toLowerCase().trim();
+    if (lastPart && lastPart.length > 2) {
+      variants.add(lastPart);
+    }
+  }
+
+  // Full normalized name (usually doesn't work well but try it)
   variants.add(normalized);
 
   // Original name (lowercased)
   variants.add(name.toLowerCase().trim());
-
-  // First + Last name
-  const parts = normalized.split(' ');
-  if (parts.length >= 2) {
-    variants.add(`${parts[0]} ${parts[parts.length - 1]}`);
-  }
-
-  // Handle hyphenated names: "Gilgeous-Alexander" -> "Gilgeous Alexander", "Alexander"
-  if (name.includes('-')) {
-    const dehyphenated = name.replace(/-/g, ' ');
-    variants.add(normalizeName(dehyphenated));
-
-    // Just the last part of hyphenated name
-    const lastPart = name.split('-').pop() || '';
-    if (lastPart && parts.length >= 1) {
-      variants.add(`${parts[0]} ${lastPart.toLowerCase()}`);
-    }
-  }
 
   return Array.from(variants);
 }
