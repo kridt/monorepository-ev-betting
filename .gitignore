@@ -47,3 +47,6 @@ temp/
 
 # TypeScript cache
 *.tsbuildinfo
+
+# Claude context file (local reference only)
+CLAUDE_CONTEXT.md
